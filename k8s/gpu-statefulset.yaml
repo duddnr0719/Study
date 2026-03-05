@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gpu-workload-stateful
+spec:
+  serviceName: "gpu-workload"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpu-workload-stateful
+  template:
+    metadata:
+      labels:
+        app: gpu-workload-stateful
+        gpu-enabled: "true"
+    spec:
+      containers:
+      - name: gpu-container
+        image: nvidia/cuda:12.3.0-runtime-ubuntu22.04
+        command: ["sleep", "infinity"]
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+          requests:
+            nvidia.com/gpu: "1"
+            memory: "8Gi"
+            cpu: "4"
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        volumeMounts:
+        - name: gpu-data
+          mountPath: /data
+      nodeSelector:
+        accelerator: nvidia-gpu
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+  volumeClaimTemplates:
+  - metadata:
+      name: gpu-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 100Gi
