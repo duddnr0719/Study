@@ -1,0 +1,23 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy
+psycopg2-binary  # PostgreSQL 연동용
+alembic         # DB 마이그레이션 관리
+
+# AI & LLM
+anthropic       # Claude API 직접 연동
+langchain       # AI 에이전트 및 프롬프트 체이닝 (선택 사항)
+python-dotenv   # .env 환경변수 관리
+
+# Integrations
+notion-client   # Notion API 공식 SDK
+httpx           # 비동기 HTTP 요청 (다른 API 연동 대비)
+
+# Testing & Utilities
+pytest
+pydantic[email]
+pydantic-settings  # Settings 관리 (BaseSettings)
+black           # 코드 포맷팅
