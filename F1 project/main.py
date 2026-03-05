@@ -196,6 +196,105 @@ class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
 
+# ── API 데이터 유효성 검사 ─────────────────────────────────────────────
+def _api_ok(data: str) -> bool:
+    """API 반환값이 실제 데이터인지(오류 메시지가 아닌지) 확인합니다."""
+    if not data:
+        return False
+    error_indicators = ['없음', '실패', 'error', '웹 검색을 사용하세요']
+    return not any(ind in data for ind in error_indicators)
+
+
+# ── 직접 답변 생성 (에이전트 우회) ─────────────────────────────────────
+_DIRECT_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
+아래 F1 공식 데이터를 바탕으로 사용자 질문에 **한국어**로 답변하세요.
+마크다운 표, 굵은 글씨, 목록을 적극 활용하세요.
+데이터에 없는 내용은 추측하지 마세요.
+
+[F1 공식 데이터]
+{data}
+
+[사용자 질문]
+{question}"""
+
+def _try_direct_answer(message: str) -> str | None:
+    """
+    구조화된 F1 쿼리를 감지하여 F1 API를 직접 호출하고,
+    에이전트(도구 호출) 없이 LLM만으로 답변을 생성합니다.
+    매칭되지 않으면 None을 반환하여 에이전트가 처리하도록 합니다.
+    """
+    msg = message.lower()
+    api_data: str | None = None
+
+    # ① 시즌 일정 / 캘린더 / 다음 레이스
+    if any(k in msg for k in [
+        '시즌 일정', '레이스 일정', '캘린더', '다음 레이스', '다음 경기',
+        'schedule', 'calendar', '레이스 스케줄', '그랑프리 일정', '2026 일정',
+        '시즌 캘린더', '레이스 캘린더'
+    ]):
+        try:
+            raw = get_race_schedule.invoke({"season": "2026"})
+            if _api_ok(raw):
+                api_data = raw
+        except Exception:
+            pass
+
+    # ② 드라이버 챔피언십 순위
+    elif any(k in msg for k in [
+        '드라이버 순위', '드라이버 챔피언십', '드라이버 스탠딩', '포인트 순위', 'driver standing'
+    ]):
+        try:
+            raw = get_driver_standings.invoke({"season": "current"})
+            if _api_ok(raw):
+                api_data = raw
+        except Exception:
+            pass
+
+    # ③ 컨스트럭터 / 팀 순위
+    elif any(k in msg for k in [
+        '컨스트럭터 순위', '팀 순위', '팀 챔피언십', '컨스트럭터 스탠딩', 'constructor standing'
+    ]):
+        try:
+            raw = get_constructor_standings.invoke({"season": "current"})
+            if _api_ok(raw):
+                api_data = raw
+        except Exception:
+            pass
+
+    # ④ 최근 레이스 결과
+    elif any(k in msg for k in [
+        '레이스 결과', '최근 레이스', '최근 경기', '지난 레이스', '지난 경기',
+        '우승자', '최근 그랑프리', '레이스 우승'
+    ]):
+        try:
+            raw = get_race_results.invoke({"season": "current", "round_num": "last"})
+            if _api_ok(raw):
+                api_data = raw
+        except Exception:
+            pass
+
+    # ⑤ 예선 결과
+    elif any(k in msg for k in [
+        '예선 결과', '퀄리파잉', '그리드 순서', 'qualifying result', '폴 포지션'
+    ]):
+        try:
+            raw = get_qualifying_results.invoke({"season": "current", "round_num": "last"})
+            if _api_ok(raw):
+                api_data = raw
+        except Exception:
+            pass
+
+    if api_data:
+        try:
+            prompt = _DIRECT_PROMPT.format(data=api_data, question=message)
+            response = llm.invoke(prompt)
+            return response.content
+        except Exception:
+            pass
+
+    return None
+
+
 # ── 웹 검색 폴백 헬퍼 ─────────────────────────────────────────────────
 def _web_search_fallback(query: str) -> str:
     try:
@@ -225,6 +324,12 @@ def chat(request: ChatRequest):
     """웹 UI용 채팅 엔드포인트 (대화 히스토리 유지)"""
     thread_id = request.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+
+    # 구조화된 F1 쿼리는 에이전트 없이 직접 처리
+    direct = _try_direct_answer(request.message)
+    if direct:
+        return {"question": request.message, "answer": direct, "thread_id": thread_id}
+
     try:
         response = agent_executor.invoke({"messages": [("human", request.message)]}, config=config)
         answer = response["messages"][-1].content
@@ -242,6 +347,20 @@ async def chat_stream(request: ChatRequest):
     """스트리밍 채팅 엔드포인트 (Server-Sent Events)"""
     thread_id = request.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+
+    # 구조화된 F1 쿼리는 에이전트 없이 직접 처리 (SSE로 스트리밍)
+    direct = _try_direct_answer(request.message)
+    if direct:
+        async def direct_stream():
+            chunk_size = 30
+            for i in range(0, len(direct), chunk_size):
+                yield f"data: {json.dumps({'token': direct[i:i+chunk_size], 'thread_id': thread_id})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'thread_id': thread_id})}\n\n"
+        return StreamingResponse(
+            direct_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def event_stream():
         try:
