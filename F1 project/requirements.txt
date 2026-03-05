@@ -1,0 +1,28 @@
+# F1 Doctor - Python 3.11+ 권장 (3.14로 개발됨)
+fastapi==0.129.0
+uvicorn==0.41.0
+python-dotenv==1.2.1
+pydantic==2.12.5
+requests==2.32.5
+
+# LangChain / LangGraph
+langchain==1.2.10
+langchain-core==1.2.14
+langchain-community==0.4.1
+langchain-text-splitters==1.1.1
+langchain-groq==1.1.2
+langchain-google-genai==4.2.1
+langchain-chroma==1.1.0
+langgraph==1.0.9
+langgraph-checkpoint==4.0.0
+langgraph-prebuilt==1.0.8
+
+# LLM / Embedding
+groq==0.37.1
+google-genai==1.64.0
+
+# Vector DB
+chromadb==1.5.1
+
+# PDF 처리 (ingest.py)
+pypdf==6.7.1

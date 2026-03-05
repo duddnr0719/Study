@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 Doctor 🏎️</title>
+  <!-- marked.js: 마크다운 렌더링 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <!-- DOMPurify: XSS 방어 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+  <style>
+    :root {
+      --red:    #e10600;
+      --dark:   #15151e;
+      --darker: #0d0d14;
+      --card:   #1e1e2e;
+      --border: #2a2a3e;
+      --text:   #e8e8f0;
+      --muted:  #7a7a9a;
+      --user-bubble:  #e10600;
+      --bot-bubble:   #252538;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--darker);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--dark);
+      border-bottom: 3px solid var(--red);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+    }
+    .logo { font-size: 28px; line-height: 1; }
+    .header-text h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: 0.5px; }
+    .header-text p  { font-size: 0.75rem; color: var(--muted); }
+    .status-dot {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; transition: background 0.3s; }
+    .dot.online { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+
+    /* ── Chat area ── */
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scroll-behavior: smooth;
+    }
+
+    /* Welcome card */
+    .welcome {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--red);
+      border-radius: 12px;
+      padding: 20px 24px;
+      max-width: 600px;
+      align-self: center;
+      text-align: center;
+    }
+    .welcome h2 { font-size: 1.1rem; margin-bottom: 8px; }
+    .welcome p  { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+    .chips {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      justify-content: center; margin-top: 14px;
+    }
+    .chip {
+      background: var(--border);
+      border: 1px solid #3a3a5a;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      color: var(--text);
+    }
+    .chip:hover { background: var(--red); border-color: var(--red); }
+
+    /* Messages */
+    .row { display: flex; gap: 10px; align-items: flex-end; }
+    .row.user { flex-direction: row-reverse; }
+
+    .avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .row.bot  .avatar { background: var(--red); }
+    .row.user .avatar { background: #3a3a5a; }
+
+    .bubble {
+      max-width: min(70%, 640px);
+      padding: 12px 16px;
+      border-radius: 18px;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      word-break: break-word;
+    }
+    .row.bot  .bubble {
+      background: var(--bot-bubble);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .row.user .bubble {
+      background: var(--user-bubble);
+      border-bottom-right-radius: 4px;
+      white-space: pre-wrap;
+    }
+
+    /* 마크다운 스타일 (봇 버블 내부) */
+    .bubble.md p       { margin-bottom: 0.6em; }
+    .bubble.md p:last-child { margin-bottom: 0; }
+    .bubble.md ul, .bubble.md ol { padding-left: 1.4em; margin-bottom: 0.6em; }
+    .bubble.md li      { margin-bottom: 0.2em; }
+    .bubble.md strong  { color: #fff; }
+    .bubble.md code    { background: #1a1a2e; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; color: #f8a5a5; }
+    .bubble.md pre     { background: #1a1a2e; border-radius: 8px; padding: 12px; overflow-x: auto; margin: 0.6em 0; }
+    .bubble.md pre code { background: none; padding: 0; color: #e8e8f0; }
+    .bubble.md table   { border-collapse: collapse; width: 100%; margin: 0.6em 0; font-size: 0.85em; }
+    .bubble.md th, .bubble.md td { border: 1px solid var(--border); padding: 6px 10px; }
+    .bubble.md th      { background: #1e1e3a; color: #fff; }
+    .bubble.md tr:nth-child(even) { background: #1c1c2a; }
+    .bubble.md h1, .bubble.md h2, .bubble.md h3 { margin: 0.6em 0 0.3em; color: #fff; }
+    .bubble.md blockquote { border-left: 3px solid var(--red); padding-left: 10px; color: var(--muted); margin: 0.5em 0; }
+
+    /* Typing indicator */
+    .typing .bubble { display: flex; align-items: center; gap: 5px; padding: 14px 18px; }
+    .dot-pulse span {
+      display: inline-block; width: 7px; height: 7px;
+      border-radius: 50%; background: var(--muted);
+      animation: pulse 1.2s infinite ease-in-out;
+    }
+    .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+    .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes pulse {
+      0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+      40%            { transform: scale(1);   opacity: 1;   }
+    }
+
+    /* Streaming cursor */
+    .cursor {
+      display: inline-block;
+      width: 2px; height: 1em;
+      background: var(--muted);
+      vertical-align: text-bottom;
+      margin-left: 2px;
+      animation: blink 0.8s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Input bar ── */
+    footer {
+      background: var(--dark);
+      border-top: 1px solid var(--border);
+      padding: 14px 16px;
+      flex-shrink: 0;
+    }
+    .input-row { display: flex; gap: 10px; max-width: 800px; margin: 0 auto; }
+    #input {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 12px 20px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      resize: none;
+      min-height: 48px;
+      max-height: 140px;
+      line-height: 1.5;
+      transition: border-color 0.2s;
+    }
+    #input:focus  { border-color: var(--red); }
+    #input::placeholder { color: var(--muted); }
+
+    #sendBtn {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: var(--red);
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+      transition: opacity 0.2s, transform 0.1s;
+      align-self: flex-end;
+    }
+    #sendBtn:hover   { opacity: 0.85; }
+    #sendBtn:active  { transform: scale(0.93); }
+    #sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .new-session-btn {
+      display: block;
+      margin: 0 auto 10px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.75rem;
+      padding: 4px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .new-session-btn:hover { border-color: var(--red); color: var(--text); }
+
+    /* scrollbar */
+    #chat::-webkit-scrollbar { width: 5px; }
+    #chat::-webkit-scrollbar-track { background: transparent; }
+    #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">🏎️</div>
+  <div class="header-text">
+    <h1>F1 Doctor</h1>
+    <p>FIA Regulations · Race History · Technical Analysis</p>
+  </div>
+  <div class="status-dot">
+    <div class="dot" id="dot"></div>
+    <span id="statusText">연결 중...</span>
+  </div>
+</header>
+
+<!-- ── Chat ── -->
+<div id="chat">
+  <div class="welcome" id="welcomeCard">
+    <h2>👋 F1 Doctor에 오신 것을 환영합니다</h2>
+    <p>FIA 공식 규정과 실시간 레이스 데이터를 기반으로<br>F1에 관한 모든 질문에 답변합니다.</p>
+    <div class="chips">
+      <button class="chip" onclick="sendChip(this)">2025 시즌 일정 알려줘</button>
+      <button class="chip" onclick="sendChip(this)">최근 레이스 결과는?</button>
+      <button class="chip" onclick="sendChip(this)">베르스타펜 vs 노리스 2024 비교</button>
+      <button class="chip" onclick="sendChip(this)">2026 액티브 에어로 규정 알려줘</button>
+      <button class="chip" onclick="sendChip(this)">최근 레이스 예선 결과</button>
+      <button class="chip" onclick="sendChip(this)">세이프티카 규정은?</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Input ── -->
+<footer>
+  <button class="new-session-btn" onclick="newSession()">＋ 새 대화 시작</button>
+  <div class="input-row">
+    <textarea id="input" placeholder="F1 규정, 레이스 결과, 전략 등 무엇이든 물어보세요..." rows="1"></textarea>
+    <button id="sendBtn" onclick="send()">➤</button>
+  </div>
+</footer>
+
+<script>
+  // ── 세션 관리 ──
+  let threadId = crypto.randomUUID();
+  let isLoading = false;
+
+  // marked 설정
+  marked.setOptions({ breaks: true, gfm: true });
+
+  // ── 서버 상태 확인 ──
+  async function checkStatus() {
+    try {
+      const res = await fetch('/health');
+      if (res.ok) {
+        document.getElementById('dot').classList.add('online');
+        document.getElementById('statusText').textContent = '온라인';
+      }
+    } catch {
+      document.getElementById('statusText').textContent = '오프라인';
+    }
+  }
+  checkStatus();
+
+  // ── textarea 자동 높이 ──
+  const input = document.getElementById('input');
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  // ── 메시지 추가 ──
+  function addMessage(text, role) {
+    const chat = document.getElementById('chat');
+    const row = document.createElement('div');
+    row.className = `row ${role}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = role === 'bot' ? '🏎' : '👤';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    if (role === 'bot') {
+      bubble.classList.add('md');
+      bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
+    } else {
+      bubble.textContent = text;
+    }
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+    return { row, bubble };
+  }
+
+  // ── 로딩 인디케이터 ──
+  function addTyping() {
+    const chat = document.getElementById('chat');
+    const row = document.createElement('div');
+    row.className = 'row bot typing';
+    row.innerHTML = `
+      <div class="avatar">🏎</div>
+      <div class="bubble">
+        <div class="dot-pulse"><span></span><span></span><span></span></div>
+      </div>`;
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+    return row;
+  }
+
+  // ── 스트리밍 봇 메시지 행 생성 ──
+  function addStreamingRow() {
+    const chat = document.getElementById('chat');
+    const row = document.createElement('div');
+    row.className = 'row bot';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = '🏎';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble md';
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    chat.appendChild(row);
+    return bubble;
+  }
+
+  // ── 전송 (스트리밍 → 폴백) ──
+  async function send() {
+    const text = input.value.trim();
+    if (!text || isLoading) return;
+
+    isLoading = true;
+    document.getElementById('sendBtn').disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    addMessage(text, 'user');
+    // 첫 메시지 전송 시 웰컴 카드 숨김
+    const welcomeCard = document.getElementById('welcomeCard');
+    if (welcomeCard) welcomeCard.style.display = 'none';
+    const typing = addTyping();
+
+    try {
+      const res = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, thread_id: threadId })
+      });
+
+      // 스트리밍 불가 시 /chat 폴백
+      if (!res.ok) {
+        const fallbackRes = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, thread_id: threadId })
+        });
+        typing.remove();
+        const data = await fallbackRes.json();
+        if (fallbackRes.ok) {
+          if (data.thread_id) threadId = data.thread_id;
+          addMessage(data.answer, 'bot');
+        } else {
+          addMessage('❌ 오류가 발생했습니다: ' + (data.detail || fallbackRes.status), 'bot');
+        }
+        return;
+      }
+
+      // 스트리밍 시작 - typing 제거 후 실제 버블로 전환
+      typing.remove();
+      const bubble = addStreamingRow();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let rawText = '';
+      let buffer = '';
+
+      // 커서 추가
+      const cursor = document.createElement('span');
+      cursor.className = 'cursor';
+      bubble.appendChild(cursor);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // 마지막 불완전한 라인은 버퍼에 유지
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const payload = JSON.parse(line.slice(6));
+
+            if (payload.token) {
+              rawText += payload.token;
+              // thread_id 업데이트
+              if (payload.thread_id) threadId = payload.thread_id;
+              // 마크다운 렌더링 (커서 유지)
+              bubble.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
+              bubble.appendChild(cursor);
+              document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+            }
+
+            if (payload.done) {
+              cursor.remove();
+              // 최종 렌더링
+              bubble.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
+              if (payload.thread_id) threadId = payload.thread_id;
+            }
+
+            if (payload.error) {
+              cursor.remove();
+              bubble.textContent = '❌ 오류: ' + payload.error;
+            }
+          } catch (_) { /* JSON 파싱 오류 무시 */ }
+        }
+      }
+
+      // 혹시 커서가 남아있으면 제거
+      cursor.remove();
+      if (rawText) {
+        bubble.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
+      }
+
+    } catch (err) {
+      typing.remove();
+      addMessage('❌ 서버에 연결할 수 없습니다.', 'bot');
+    } finally {
+      isLoading = false;
+      document.getElementById('sendBtn').disabled = false;
+      input.focus();
+    }
+  }
+
+  // ── 칩 클릭 ──
+  function sendChip(btn) {
+    input.value = btn.textContent;
+    send();
+  }
+
+  // ── 새 대화 ──
+  function newSession() {
+    threadId = crypto.randomUUID(); // 새 thread_id → 히스토리 초기화
+    const chat = document.getElementById('chat');
+    chat.querySelectorAll('.row').forEach(m => m.remove());
+    // 웰컴 카드 복원 + 스크롤 초기화
+    const welcomeCard = document.getElementById('welcomeCard');
+    if (welcomeCard) welcomeCard.style.display = '';
+    chat.scrollTop = 0;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# 환경 변수 (API 키 포함 - 절대 커밋 금지)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# 벡터 DB (용량이 크고 재생성 가능)
+chroma_db/
+
+# 임베딩 진행 상황 체크포인트
+ingest_checkpoint.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 데이터 (규정 PDF - 용량 큼)
+# data/  ← 필요 시 주석 해제
