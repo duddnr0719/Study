@@ -37,17 +37,32 @@
       flex-shrink: 0;
       flex-wrap: wrap;
     }
-    .back-link {
-      color: var(--muted);
-      text-decoration: none;
-      font-size: 0.85rem;
+    /* ── Page Nav ── */
+    .page-nav {
       display: flex;
       align-items: center;
-      gap: 5px;
-      transition: color 0.2s;
+      gap: 4px;
+    }
+    .nav-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-decoration: none;
+      color: var(--muted);
+      border: 1px solid transparent;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
       white-space: nowrap;
     }
-    .back-link:hover { color: var(--text); }
+    .nav-tab:hover { color: var(--text); border-color: var(--border); }
+    .nav-tab.active {
+      color: var(--text);
+      background: var(--card);
+      border-color: var(--red);
+    }
 
     .session-info {
       flex: 1;
@@ -351,7 +366,10 @@
 
 <!-- ── Header ── -->
 <header>
-  <a class="back-link" href="/">← F1 Doctor</a>
+  <nav class="page-nav">
+    <a class="nav-tab" href="/">💬 AI Chat</a>
+    <a class="nav-tab active" href="/telemetry">📡 Live Telemetry</a>
+  </nav>
   <div class="session-info">
     <h1 id="sessionTitle">🏁 F1 Live Telemetry</h1>
     <p id="sessionSub">세션 정보를 불러오는 중...</p>

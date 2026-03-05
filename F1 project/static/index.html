@@ -45,13 +45,42 @@
     .logo { font-size: 28px; line-height: 1; }
     .header-text h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: 0.5px; }
     .header-text p  { font-size: 0.75rem; color: var(--muted); }
-    .status-dot {
+    /* ── Page Nav ── */
+    .page-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
       margin-left: auto;
+    }
+    .nav-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-decoration: none;
+      color: var(--muted);
+      border: 1px solid transparent;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+      white-space: nowrap;
+    }
+    .nav-tab:hover { color: var(--text); border-color: var(--border); }
+    .nav-tab.active {
+      color: var(--text);
+      background: var(--card);
+      border-color: var(--red);
+    }
+
+    .status-dot {
       display: flex;
       align-items: center;
       gap: 6px;
       font-size: 0.75rem;
       color: var(--muted);
+      padding-left: 12px;
+      border-left: 1px solid var(--border);
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; transition: background 0.3s; }
     .dot.online { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
@@ -241,6 +270,10 @@
     <h1>F1 Doctor</h1>
     <p>FIA Regulations · Race History · Technical Analysis</p>
   </div>
+  <nav class="page-nav">
+    <a class="nav-tab active" href="/">💬 AI Chat</a>
+    <a class="nav-tab" href="/telemetry">📡 Live Telemetry</a>
+  </nav>
   <div class="status-dot">
     <div class="dot" id="dot"></div>
     <span id="statusText">연결 중...</span>
