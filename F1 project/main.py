@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from telemetry import router as telemetry_router
+
 from langchain_groq import ChatGroq
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
@@ -52,6 +54,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+app.include_router(telemetry_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ── 도구 설정 ─────────────────────────────────────────────────────────
@@ -142,6 +145,28 @@ SYSTEM_PROMPT = """당신은 F1(포뮬러 원) 전문가 AI 어시스턴트 'F1 
 - 차체: 차폭 축소 및 중량 감소
 - 재정: 코스트캡 세부 조항 업데이트
 
+### 2026 드라이버 라인업 (현재 시즌)
+| 팀 | 드라이버 |
+|---|---|
+| McLaren | Lando Norris (2025 WDC 🏆), Oscar Piastri |
+| Ferrari | Charles Leclerc, Lewis Hamilton |
+| Mercedes | George Russell, Kimi Antonelli |
+| Red Bull Racing | Max Verstappen, Isack Hadjar |
+| Racing Bulls | Liam Lawson, Arvid Lindblad |
+| Williams | Carlos Sainz, Alex Albon |
+| Aston Martin | Fernando Alonso, Lance Stroll |
+| Haas | Esteban Ocon, Ollie Bearman |
+| Audi | Nico Hülkenberg, Gabriel Bortoleto |
+| Alpine | Pierre Gasly, Franco Colapinto |
+| Cadillac (신규) | Valtteri Bottas, Sergio Perez |
+
+주요 이적:
+- 루이스 해밀턴: 메르세데스 → 페라리 (2025~)
+- 키미 안토넬리: 메르세데스 데뷔 (해밀턴 후임)
+- 이삭 하다르: 레드불 데뷔 (페레스 후임)
+- 카데락: 2026 신규 팀 합류 (보타스 + 페레스)
+- 아르빗 린트블라드: F1 유일한 루키
+
 ## 답변 규칙
 - 항상 한국어로 답변하세요.
 - 마크다운 형식(표, 굵은 글씨, 목록 등)을 적극 활용하여 가독성을 높이세요.
@@ -179,6 +204,10 @@ def home():
 def health():
     """서버 상태 확인 엔드포인트"""
     return {"status": "ok"}
+
+@app.get("/telemetry", include_in_schema=False)
+def telemetry_page():
+    return FileResponse("static/telemetry.html")
 
 @app.post("/chat")
 def chat(request: ChatRequest):
