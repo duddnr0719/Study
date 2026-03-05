@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 Live Telemetry 🏁</title>
+  <style>
+    :root {
+      --red:    #e10600;
+      --dark:   #15151e;
+      --darker: #0d0d14;
+      --card:   #1e1e2e;
+      --border: #2a2a3e;
+      --text:   #e8e8f0;
+      --muted:  #7a7a9a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--darker);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--dark);
+      border-bottom: 3px solid var(--red);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .back-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: color 0.2s;
+      white-space: nowrap;
+    }
+    .back-link:hover { color: var(--text); }
+
+    .session-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .session-info h1 {
+      font-size: 1rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-info p {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .last-update {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .refresh-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .toggle-pill {
+      width: 38px; height: 20px;
+      background: #333;
+      border-radius: 10px;
+      position: relative;
+      transition: background 0.3s;
+    }
+    .toggle-pill.on { background: var(--red); }
+    .toggle-pill::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 14px; height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left 0.3s;
+    }
+    .toggle-pill.on::after { left: 21px; }
+
+    /* ── Weather Strip ── */
+    #weatherStrip {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 20px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+      min-height: 36px;
+    }
+    .weather-item strong { color: var(--text); margin-left: 4px; }
+    .rain-badge {
+      background: #0067ff22;
+      color: #60aaff;
+      border: 1px solid #0067ff55;
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 0.72rem;
+    }
+
+    /* ── Main Grid ── */
+    .main-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      grid-template-rows: 1fr auto;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    /* ── Driver Table Panel ── */
+    .driver-panel {
+      overflow-y: auto;
+      padding: 16px;
+      border-right: 1px solid var(--border);
+    }
+    .panel-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    thead th {
+      text-align: left;
+      padding: 6px 8px;
+      background: var(--dark);
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    tbody tr:hover { background: #ffffff08; }
+    tbody tr.selected { background: #e1060015; }
+    tbody td {
+      padding: 7px 8px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .pos-cell { font-weight: 700; width: 28px; text-align: center; }
+
+    .driver-num-badge {
+      display: inline-block;
+      width: 26px; height: 22px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-align: center;
+      line-height: 22px;
+      color: #000;
+    }
+
+    .driver-name { font-weight: 600; }
+    .team-name   { font-size: 0.72rem; color: var(--muted); }
+
+    .gap-cell { font-size: 0.78rem; color: #aaa; min-width: 72px; }
+    .gap-cell.leader { color: #ffd700; font-weight: 700; }
+
+    .lap-cell { font-size: 0.78rem; font-family: monospace; min-width: 72px; }
+    .lap-cell.best { color: #b44fff; font-weight: 700; }
+
+    /* Tyre badge */
+    .tyre {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      font-size: 0.65rem;
+      font-weight: 800;
+      border: 2px solid transparent;
+    }
+    .tyre.SOFT         { background: #e10600; color: #fff; border-color: #e10600; }
+    .tyre.MEDIUM       { background: #ffd700; color: #000; border-color: #ffd700; }
+    .tyre.HARD         { background: #e8e8e8; color: #000; border-color: #e8e8e8; }
+    .tyre.INTERMEDIATE { background: #39b54a; color: #fff; border-color: #39b54a; }
+    .tyre.WET          { background: #0067ff; color: #fff; border-color: #0067ff; }
+    .tyre.unknown      { background: #444;    color: #aaa; border-color: #555;    }
+
+    .pit-cell { font-size: 0.78rem; color: var(--muted); text-align: center; }
+
+    /* ── Race Control Panel ── */
+    .rc-panel {
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .rc-msg {
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 0.76rem;
+      line-height: 1.45;
+      border-left: 3px solid transparent;
+    }
+    .rc-meta { font-size: 0.67rem; color: var(--muted); margin-bottom: 2px; }
+
+    .rc-msg.YELLOW       { background: #2a2200; border-color: #ffd700; }
+    .rc-msg.RED          { background: #220000; border-color: #e10600; }
+    .rc-msg.GREEN        { background: #001a00; border-color: #39b54a; }
+    .rc-msg.CHEQUERED    { background: #1a1a1a; border-color: #fff; }
+    .rc-msg.SAFETY_CAR  { background: #2a1a00; border-color: #ff8c00; }
+    .rc-msg.VSC          { background: #2a1a00; border-color: #ff8c00; }
+    .rc-msg.default      { background: var(--card); border-color: var(--border); }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      color: var(--muted);
+      text-align: center;
+      gap: 10px;
+    }
+    .empty-state .icon { font-size: 2.5rem; }
+    .empty-state h3    { font-size: 0.95rem; color: var(--text); }
+    .empty-state p     { font-size: 0.8rem; line-height: 1.6; }
+
+    /* ── Car Detail Panel ── */
+    #carPanel {
+      grid-column: 1 / -1;
+      background: var(--dark);
+      border-top: 1px solid var(--border);
+      padding: 16px 20px;
+      display: none;
+    }
+    #carPanel.visible { display: block; }
+
+    .car-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .car-driver-name { font-size: 1rem; font-weight: 700; }
+    .car-team-name   { font-size: 0.78rem; color: var(--muted); }
+    .close-car-btn {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .close-car-btn:hover { border-color: var(--red); color: var(--text); }
+
+    .car-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+    }
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .metric-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .metric-unit { font-size: 0.72rem; color: var(--muted); margin-left: 2px; }
+
+    .bar-wrap {
+      height: 6px;
+      background: #333;
+      border-radius: 3px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+    .bar-throttle { background: #39b54a; }
+    .bar-brake    { background: #e10600; }
+
+    .drs-on  { color: #39b54a; }
+    .drs-off { color: var(--muted); }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .main-grid { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+      .driver-panel { border-right: none; border-bottom: 1px solid var(--border); }
+      .rc-panel { max-height: 280px; }
+      table { font-size: 0.75rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <a class="back-link" href="/">← F1 Doctor</a>
+  <div class="session-info">
+    <h1 id="sessionTitle">🏁 F1 Live Telemetry</h1>
+    <p id="sessionSub">세션 정보를 불러오는 중...</p>
+  </div>
+  <div class="header-controls">
+    <span class="last-update" id="lastUpdate">-</span>
+    <div class="refresh-toggle" onclick="toggleRefresh()" title="자동 갱신 ON/OFF">
+      <div class="toggle-pill on" id="togglePill"></div>
+      <span id="toggleLabel">5초 자동갱신</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Weather Strip ── -->
+<div id="weatherStrip">
+  <span style="color:var(--muted)">날씨 정보 로딩 중...</span>
+</div>
+
+<!-- ── Main Grid ── -->
+<div class="main-grid">
+
+  <!-- Driver Table -->
+  <div class="driver-panel">
+    <div class="panel-title">드라이버 순위</div>
+    <div id="driverTableWrap">
+      <div class="empty-state">
+        <div class="icon">🏎️</div>
+        <h3>데이터 로딩 중...</h3>
+        <p>OpenF1 API에서 세션 데이터를 가져오고 있습니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Race Control -->
+  <div class="rc-panel">
+    <div class="panel-title">레이스 컨트롤</div>
+    <div id="rcList">
+      <div class="empty-state">
+        <div class="icon">📡</div>
+        <h3>메시지 없음</h3>
+        <p>레이스 컨트롤 메시지를 기다리는 중입니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Car Detail -->
+  <div id="carPanel">
+    <div class="car-header">
+      <div class="driver-num-badge" id="carBadge" style="background:#e10600">--</div>
+      <div>
+        <div class="car-driver-name" id="carDriverName">-</div>
+        <div class="car-team-name" id="carTeamName">-</div>
+      </div>
+      <button class="close-car-btn" onclick="closeCarPanel()">✕ 닫기</button>
+    </div>
+    <div class="car-metrics" id="carMetrics">
+      <!-- filled by JS -->
+    </div>
+  </div>
+
+</div><!-- /main-grid -->
+
+<script>
+  // ── 상태 ──────────────────────────────────────────────────────────
+  let refreshEnabled = true;
+  let refreshInterval = null;
+  let selectedDriver = null;
+
+  // ── 유틸 ──────────────────────────────────────────────────────────
+  function fmtTime(date) {
+    if (!date) return '-';
+    try { return new Date(date).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+    catch { return date; }
+  }
+
+  function tyreClass(compound) {
+    if (!compound || compound === '-') return 'unknown';
+    const c = compound.toUpperCase();
+    if (c.includes('SOFT'))         return 'SOFT';
+    if (c.includes('MEDIUM'))       return 'MEDIUM';
+    if (c.includes('HARD'))         return 'HARD';
+    if (c.includes('INTER'))        return 'INTERMEDIATE';
+    if (c.includes('WET'))          return 'WET';
+    return 'unknown';
+  }
+
+  function tyreLabel(compound) {
+    if (!compound || compound === '-') return '?';
+    const c = compound.toUpperCase();
+    if (c.includes('SOFT'))   return 'S';
+    if (c.includes('MEDIUM')) return 'M';
+    if (c.includes('HARD'))   return 'H';
+    if (c.includes('INTER'))  return 'I';
+    if (c.includes('WET'))    return 'W';
+    return '?';
+  }
+
+  function rcClass(msg) {
+    const flag = (msg.flag || '').toUpperCase();
+    const cat  = (msg.category || '').toUpperCase();
+    if (flag === 'RED' || cat.includes('RED FLAG'))         return 'RED';
+    if (flag === 'YELLOW' || flag.includes('YELLOW'))       return 'YELLOW';
+    if (flag === 'GREEN')                                   return 'GREEN';
+    if (flag === 'CHEQUERED')                               return 'CHEQUERED';
+    if (cat.includes('SAFETY CAR') || flag.includes('SC')) return 'SAFETY_CAR';
+    if (cat.includes('VIRTUAL'))                            return 'VSC';
+    return 'default';
+  }
+
+  function rcIcon(msg) {
+    const flag = (msg.flag || '').toUpperCase();
+    const cat  = (msg.category || '').toUpperCase();
+    if (flag === 'RED')           return '🚩';
+    if (flag.includes('YELLOW')) return '🟡';
+    if (flag === 'GREEN')        return '🟢';
+    if (flag === 'CHEQUERED')    return '🏁';
+    if (cat.includes('SAFETY CAR')) return '🚗';
+    if (cat.includes('VIRTUAL'))    return '🟠';
+    if (cat.includes('PENALTY'))    return '⚖️';
+    return '📢';
+  }
+
+  // ── 날씨 렌더 ─────────────────────────────────────────────────────
+  function renderWeather(w) {
+    if (!w) {
+      document.getElementById('weatherStrip').innerHTML =
+        '<span style="color:var(--muted)">날씨 데이터 없음</span>';
+      return;
+    }
+    const rain = parseFloat(w.rainfall) > 0;
+    document.getElementById('weatherStrip').innerHTML = `
+      <div class="weather-item">🌡️ 트랙 <strong>${w.track_temperature ?? '-'}°C</strong></div>
+      <div class="weather-item">🌤️ 공기 <strong>${w.air_temperature ?? '-'}°C</strong></div>
+      <div class="weather-item">💧 습도 <strong>${w.humidity ?? '-'}%</strong></div>
+      <div class="weather-item">💨 바람 <strong>${w.wind_speed ?? '-'} m/s</strong></div>
+      ${rain ? '<span class="rain-badge">🌧️ 비 감지</span>' : '<span class="weather-item">☀️ 맑음</span>'}
+    `;
+  }
+
+  // ── 드라이버 테이블 렌더 ───────────────────────────────────────────
+  function renderDrivers(session, drivers) {
+    // 세션 헤더
+    if (session) {
+      document.getElementById('sessionTitle').textContent =
+        `🏁 ${session.session_name ?? 'Live'} — ${session.location ?? ''}`;
+      document.getElementById('sessionSub').textContent =
+        `${session.country_name ?? ''} · ${session.circuit_short_name ?? ''} · ${session.year ?? ''}`;
+    } else {
+      document.getElementById('sessionTitle').textContent = '🏁 F1 Live Telemetry';
+      document.getElementById('sessionSub').textContent   = '활성 세션 없음';
+    }
+
+    const wrap = document.getElementById('driverTableWrap');
+
+    if (!drivers || drivers.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">⏸️</div>
+          <h3>활성 세션 없음</h3>
+          <p>현재 진행 중인 F1 세션이 없습니다.<br>경기 중에 다시 확인해 주세요.</p>
+        </div>`;
+      return;
+    }
+
+    let html = `
+      <table>
+        <thead>
+          <tr>
+            <th>P</th>
+            <th>#</th>
+            <th>드라이버</th>
+            <th>간격</th>
+            <th>최근 랩</th>
+            <th>최고 랩</th>
+            <th>타이어</th>
+            <th>랩</th>
+            <th>핏</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+    drivers.forEach(d => {
+      const tc   = tyreClass(d.tyre_compound);
+      const tl   = tyreLabel(d.tyre_compound);
+      const gap  = d.position === 1 ? '<span class="gap-cell leader">— 선두 —</span>'
+                                    : `<span class="gap-cell">${d.gap_to_leader ?? '-'}</span>`;
+      const color = d.team_colour ? `#${d.team_colour}` : '#e10600';
+      const sel   = selectedDriver === d.driver_number ? 'selected' : '';
+
+      html += `
+        <tr class="${sel}" onclick="selectDriver(${d.driver_number}, '${d.full_name}', '${d.team_name}', '${color}')">
+          <td class="pos-cell">${d.position ?? '-'}</td>
+          <td><span class="driver-num-badge" style="background:${color};color:${d.team_colour === 'FFFFFF' || d.team_colour === 'ffffff' ? '#000' : '#fff'}">${d.driver_number}</span></td>
+          <td>
+            <div class="driver-name">${d.name_acronym ?? d.full_name}</div>
+            <div class="team-name">${d.team_name ?? ''}</div>
+          </td>
+          <td>${gap}</td>
+          <td class="lap-cell">${d.last_lap ?? '-'}</td>
+          <td class="lap-cell best">${d.best_lap ?? '-'}</td>
+          <td><span class="tyre ${tc}" title="${d.tyre_compound ?? '-'}">${tl}</span></td>
+          <td class="pit-cell">${d.tyre_age ?? '-'}</td>
+          <td class="pit-cell">${d.pit_count ?? 0}</td>
+        </tr>`;
+    });
+
+    html += `</tbody></table>`;
+    wrap.innerHTML = html;
+  }
+
+  // ── 레이스 컨트롤 렌더 ────────────────────────────────────────────
+  function renderRaceControl(messages) {
+    const list = document.getElementById('rcList');
+    if (!messages || messages.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📡</div>
+          <h3>메시지 없음</h3>
+          <p>레이스 컨트롤 메시지를 기다리는 중입니다.</p>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = messages.map(m => `
+      <div class="rc-msg ${rcClass(m)}">
+        <div class="rc-meta">${rcIcon(m)} 랩 ${m.lap_number ?? '-'} · ${fmtTime(m.date)}</div>
+        <div>${m.message ?? '-'}</div>
+      </div>`).join('');
+  }
+
+  // ── 차량 데이터 패널 ──────────────────────────────────────────────
+  function selectDriver(number, fullName, teamName, color) {
+    selectedDriver = number;
+
+    document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+
+    document.getElementById('carBadge').textContent    = number;
+    document.getElementById('carBadge').style.background = color;
+    document.getElementById('carDriverName').textContent = fullName;
+    document.getElementById('carTeamName').textContent   = teamName;
+    document.getElementById('carPanel').classList.add('visible');
+
+    fetchCarData(number);
+  }
+
+  function closeCarPanel() {
+    selectedDriver = null;
+    document.getElementById('carPanel').classList.remove('visible');
+    document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+  }
+
+  function renderCarData(data) {
+    if (!data || !data.latest || Object.keys(data.latest).length === 0) {
+      document.getElementById('carMetrics').innerHTML =
+        '<div style="color:var(--muted);font-size:0.82rem;">차량 데이터가 없습니다.</div>';
+      return;
+    }
+
+    const l = data.latest;
+    const speed    = l.speed    ?? 0;
+    const throttle = l.throttle ?? 0;
+    const brake    = l.brake    ? 1 : 0;
+    const gear     = l.n_gear   ?? '-';
+    const rpm      = l.rpm      ?? '-';
+    const drs      = l.drs;
+    // DRS: 0=off, 8=open (OpenF1 값)
+    const drsOn    = drs === 8 || drs === 10 || drs === 12 || drs === 14;
+
+    document.getElementById('carMetrics').innerHTML = `
+      <div class="metric-card">
+        <div class="metric-label">속도</div>
+        <div class="metric-value">${speed}<span class="metric-unit">km/h</span></div>
+        <div class="bar-wrap"><div class="bar-fill bar-throttle" style="width:${Math.min(speed/360*100,100).toFixed(1)}%"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">스로틀</div>
+        <div class="metric-value">${throttle}<span class="metric-unit">%</span></div>
+        <div class="bar-wrap"><div class="bar-fill bar-throttle" style="width:${throttle}%"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">브레이크</div>
+        <div class="metric-value" style="color:${brake ? '#e10600' : 'var(--muted)'}">${brake ? 'ON' : 'OFF'}</div>
+        <div class="bar-wrap"><div class="bar-fill bar-brake" style="width:${brake * 100}%"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">기어</div>
+        <div class="metric-value">${gear}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">RPM</div>
+        <div class="metric-value" style="font-size:1.1rem">${typeof rpm === 'number' ? rpm.toLocaleString() : rpm}</div>
+        <div class="bar-wrap"><div class="bar-fill bar-throttle" style="width:${typeof rpm === 'number' ? Math.min(rpm/15000*100,100).toFixed(1) : 0}%"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">DRS</div>
+        <div class="metric-value ${drsOn ? 'drs-on' : 'drs-off'}">${drsOn ? '▲ OPEN' : '▽ CLOSED'}</div>
+      </div>
+    `;
+  }
+
+  // ── API 호출 ──────────────────────────────────────────────────────
+  async function fetchOverview() {
+    try {
+      const res  = await fetch('/api/live/overview');
+      const data = await res.json();
+      renderDrivers(data.session, data.drivers);
+    } catch (e) {
+      console.error('overview error:', e);
+    }
+  }
+
+  async function fetchRaceControl() {
+    try {
+      const res  = await fetch('/api/live/race-control');
+      const data = await res.json();
+      renderRaceControl(data.messages);
+    } catch (e) {
+      console.error('race-control error:', e);
+    }
+  }
+
+  async function fetchWeather() {
+    try {
+      const res  = await fetch('/api/live/weather');
+      const data = await res.json();
+      renderWeather(data.weather);
+    } catch (e) {
+      console.error('weather error:', e);
+    }
+  }
+
+  async function fetchCarData(driverNumber) {
+    try {
+      const res  = await fetch(`/api/live/car-data/${driverNumber}`);
+      const data = await res.json();
+      renderCarData(data);
+    } catch (e) {
+      console.error('car-data error:', e);
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([fetchOverview(), fetchRaceControl(), fetchWeather()]);
+    // 선택된 드라이버 있으면 차량 데이터도 갱신
+    if (selectedDriver !== null) fetchCarData(selectedDriver);
+    document.getElementById('lastUpdate').textContent =
+      '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+  }
+
+  // ── 자동 갱신 토글 ────────────────────────────────────────────────
+  function toggleRefresh() {
+    refreshEnabled = !refreshEnabled;
+    const pill  = document.getElementById('togglePill');
+    const label = document.getElementById('toggleLabel');
+
+    if (refreshEnabled) {
+      pill.classList.add('on');
+      label.textContent = '5초 자동갱신';
+      startRefresh();
+    } else {
+      pill.classList.remove('on');
+      label.textContent = '갱신 일시중지';
+      clearInterval(refreshInterval);
+      refreshInterval = null;
+    }
+  }
+
+  function startRefresh() {
+    clearInterval(refreshInterval);
+    refreshInterval = setInterval(refreshAll, 5000);
+  }
+
+  // ── 초기 로드 ─────────────────────────────────────────────────────
+  refreshAll();
+  startRefresh();
+</script>
+</body>
+</html>
