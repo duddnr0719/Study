@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 로그
+*.log
+logs/
+
+# 환경변수
+.env
+.env.local
+.env.*.local
+
+# 의존성
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# 빌드 결과물
+dist/
+build/
+.next/
+out/
