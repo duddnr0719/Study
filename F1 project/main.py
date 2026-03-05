@@ -197,6 +197,15 @@ class ChatRequest(BaseModel):
     thread_id: str | None = None
 
 # ── API 데이터 유효성 검사 ─────────────────────────────────────────────
+_F1_MARKERS = ['formula 1', 'grand prix', ' f1 ', 'fia', 'constructor',
+               'driver', 'circuit', 'race', 'formula one', 'motorsport',
+               'mclaren', 'ferrari', 'mercedes', 'red bull', 'alpine',
+               'williams', 'haas', 'aston martin', 'audi', 'cadillac']
+
+def _is_f1_content(text: str) -> bool:
+    """텍스트가 F1 관련 내용인지 검증합니다."""
+    return any(m in text.lower() for m in _F1_MARKERS)
+
 def _api_ok(data: str) -> bool:
     """API 반환값이 실제 데이터인지(오류 메시지가 아닌지) 확인합니다."""
     if not data:
@@ -217,14 +226,50 @@ _DIRECT_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 [사용자 질문]
 {question}"""
 
+_NEWS_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
+아래 F1 최신 뉴스 검색 결과를 바탕으로 사용자 질문에 **한국어**로 답변하세요.
+
+답변 형식:
+- 주요 이슈/소식을 **굵은 글씨** 제목으로 구분하여 정리하세요.
+- 각 항목은 간결하게 2~3문장으로 요약하세요.
+- 검색 결과에 없는 내용은 추측하지 마세요.
+- 마지막에 "출처: 웹 검색 (DuckDuckGo)" 를 한 줄 추가하세요.
+
+[F1 최신 뉴스 검색 결과]
+{data}
+
+[사용자 질문]
+{question}"""
+
+def _build_news_query(msg: str) -> str:
+    """메시지 키워드를 분석해 최적의 F1 뉴스 검색 쿼리를 구성합니다."""
+    base = "F1 Formula 1 2026"
+    if any(k in msg for k in ['이적', '계약', '트랜스퍼', 'transfer', '드라이버 변경']):
+        return f"{base} driver transfer contract signing news"
+    if any(k in msg for k in ['사고', '충돌', '크래시', 'crash', 'accident', '리타이어']):
+        return f"{base} crash incident accident retirement"
+    if any(k in msg for k in ['페널티', '처벌', '조사', 'penalty', 'investigation', '스튜어드']):
+        return f"{base} penalty stewards investigation decision"
+    if any(k in msg for k in ['개발', '업그레이드', '파츠', 'upgrade', 'development', '신차']):
+        return f"{base} car development upgrade technical news"
+    if any(k in msg for k in ['챔피언십', '타이틀', '포인트', 'championship', 'title']):
+        return f"{base} championship standings points news"
+    if any(k in msg for k in ['프리시즌', '테스트', 'preseason', 'testing', '바르셀로나']):
+        return f"{base} pre-season testing Bahrain news"
+    if any(k in msg for k in ['팀', '컨스트럭터', 'team']):
+        return f"{base} team constructor news update"
+    return f"{base} latest news updates recent"
+
+
 def _try_direct_answer(message: str) -> str | None:
     """
-    구조화된 F1 쿼리를 감지하여 F1 API를 직접 호출하고,
+    구조화된 F1 쿼리를 감지하여 F1 API 또는 F1 뉴스 검색을 직접 호출하고,
     에이전트(도구 호출) 없이 LLM만으로 답변을 생성합니다.
     매칭되지 않으면 None을 반환하여 에이전트가 처리하도록 합니다.
     """
     msg = message.lower()
     api_data: str | None = None
+    news_data: str | None = None
 
     # ① 시즌 일정 / 캘린더 / 다음 레이스
     if any(k in msg for k in [
@@ -284,9 +329,33 @@ def _try_direct_answer(message: str) -> str | None:
         except Exception:
             pass
 
+    # ⑥ 최신 뉴스 / 소식 / 이슈 (웹 검색 — F1 접두어 보장)
+    elif any(k in msg for k in [
+        '뉴스', '소식', '이슈', '루머', '이적', '화제', '논란', '근황',
+        '최신 소식', '어떤 일', '어떤 이슈', '최근 소식', '최근 이슈',
+        '이번 시즌 소식', '팀 소식', '드라이버 소식', '요즘', '근래',
+        '이번 주', '이번 달', '프리시즌', '테스트 소식'
+    ]):
+        try:
+            query = _build_news_query(msg)
+            result = search.run(query)
+            if result and _is_f1_content(result):
+                news_data = result
+        except Exception:
+            pass
+
+    # ── 결과 반환 ──
     if api_data:
         try:
             prompt = _DIRECT_PROMPT.format(data=api_data, question=message)
+            response = llm.invoke(prompt)
+            return response.content
+        except Exception:
+            pass
+
+    if news_data:
+        try:
+            prompt = _NEWS_PROMPT.format(data=news_data, question=message)
             response = llm.invoke(prompt)
             return response.content
         except Exception:
