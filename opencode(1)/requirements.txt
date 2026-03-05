@@ -1,0 +1,13 @@
+# Web Scraping and Crawling
+beautifulsoup4==4.12.3
+requests==2.31.0
+feedparser==6.0.11
+
+# Notion API
+notion-client==2.2.1
+
+# AI Summarization (Ollama local LLM)
+ollama==0.4.7
+
+# Environment Variables
+python-dotenv==1.0.1
