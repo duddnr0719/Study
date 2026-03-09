@@ -1,8 +1,13 @@
 import os
 import uuid
 import json
+import time
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import requests
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
@@ -41,9 +46,10 @@ from f1_api import (
 load_dotenv()
 
 # ── 설정 ──────────────────────────────────────────────────────────────
-LLM_MODEL       = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
-EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
-CHROMA_DIR      = os.getenv("CHROMA_DIR", "./chroma_db")
+LLM_MODEL        = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+EMBEDDING_MODEL  = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
+CHROMA_DIR       = os.getenv("CHROMA_DIR", "./chroma_db")
+OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────
 app = FastAPI(title="F1 Doctor Agentic AI", version="4.0")
@@ -214,6 +220,157 @@ def _api_ok(data: str) -> bool:
     return not any(ind in data for ind in error_indicators)
 
 
+# ── 실시간 세션 컨텍스트 (30초 캐시) ──────────────────────────────────
+_live_ctx_cache: dict = {"data": None, "ts": 0.0}
+_LIVE_CTX_TTL = 30  # seconds
+
+def _openf1(endpoint: str, params: dict = None) -> list:
+    """OpenF1 API GET — 오류 시 빈 리스트 반환"""
+    try:
+        r = requests.get(f"{OPENF1_BASE_URL}/{endpoint}",
+                         params=params or {}, timeout=6)
+        r.raise_for_status()
+        d = r.json()
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+def _fetch_live_context() -> str | None:
+    """
+    OpenF1에서 최신 F1 세션 데이터를 가져와 LLM 컨텍스트 문자열로 반환합니다.
+    세션이 없거나 24시간 이상 지난 경우 None 반환. 30초 캐시 적용.
+    포함 데이터: 세션 정보 · 레이스 컨트롤 메시지 · 드라이버 포지션 · 날씨
+    """
+    global _live_ctx_cache
+    now = time.time()
+    if now - _live_ctx_cache["ts"] < _LIVE_CTX_TTL and _live_ctx_cache["data"] is not None:
+        return _live_ctx_cache["data"]
+
+    def _cache(val):
+        _live_ctx_cache["data"] = val
+        _live_ctx_cache["ts"]   = time.time()
+        return val
+
+    try:
+        sessions = _openf1("sessions", {"session_key": "latest"})
+        if not sessions:
+            return _cache(None)
+
+        session = sessions[-1]
+        sk = session.get("session_key")
+
+        # 24시간 이상 지난 세션은 무시
+        date_start_str = session.get("date_start", "")
+        if date_start_str:
+            try:
+                ds = datetime.fromisoformat(date_start_str.replace("Z", "+00:00"))
+                hours_ago = (datetime.now(timezone.utc) - ds).total_seconds() / 3600
+                if hours_ago > 24:
+                    return _cache(None)
+            except Exception:
+                pass
+
+        session_name = session.get("session_name", "")
+        session_type = session.get("session_type", "")
+        location     = session.get("location", "")
+        country      = session.get("country_name", "")
+        year         = session.get("year", "")
+
+        # 병렬 호출: 레이스 컨트롤 + 인터벌 + 드라이버 + 날씨
+        sources = {
+            "rc":       ("race_control", {"session_key": sk}),
+            "intervals":("intervals",    {"session_key": sk}),
+            "drivers":  ("drivers",      {"session_key": sk}),
+            "weather":  ("weather",      {"session_key": sk}),
+        }
+        results: dict = {}
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {ex.submit(_openf1, ep, p): name for name, (ep, p) in sources.items()}
+            for fut in as_completed(futs):
+                results[futs[fut]] = fut.result()
+
+        rc_raw       = results.get("rc", [])
+        intervals_raw= results.get("intervals", [])
+        drivers_raw  = results.get("drivers", [])
+        weather_raw  = results.get("weather", [])
+
+        lines = [
+            f"## F1 세션 정보",
+            f"- 이벤트: {year} {country} GP — {location} / {session_name} ({session_type})",
+            f"- 세션 키: {sk}",
+        ]
+
+        # ── 날씨 ──────────────────────────────────────────────────────
+        if weather_raw:
+            w = sorted(weather_raw, key=lambda r: r.get("date", ""), reverse=True)[0]
+            rain = "🌧 비" if w.get("rainfall") else "☀ 맑음"
+            lines.append(
+                f"- 날씨: {rain} | 트랙 {w.get('track_temperature','?')}°C "
+                f"| 기온 {w.get('air_temperature','?')}°C "
+                f"| 습도 {w.get('humidity','?')}%"
+            )
+
+        # ── 레이스 컨트롤 메시지 ──────────────────────────────────────
+        if rc_raw:
+            rc_sorted = sorted(rc_raw, key=lambda r: r.get("date",""), reverse=True)[:25]
+            rc_sorted.reverse()
+            lines.append("\n### 레이스 컨트롤 메시지 (시간 순)")
+            lines.append("| 랩 | 플래그 | 메시지 | 드라이버# |")
+            lines.append("|-----|--------|--------|----------|")
+            for m in rc_sorted:
+                flag = m.get("flag") or m.get("category", "")
+                lap  = m.get("lap_number", "-")
+                msg  = m.get("message", "")
+                dn   = m.get("driver_number", "-") or "-"
+                lines.append(f"| {lap} | {flag} | {msg} | {dn} |")
+
+        # ── 드라이버 현황 (상위 10위) ──────────────────────────────────
+        if intervals_raw and drivers_raw:
+            driver_map = {}
+            for d in drivers_raw:
+                dn = str(d.get("driver_number", ""))
+                if dn and dn not in driver_map:
+                    driver_map[dn] = d
+
+            # 최신 인터벌만 추출
+            latest_intervals: dict[str, dict] = {}
+            for iv in intervals_raw:
+                dn = str(iv.get("driver_number", ""))
+                if dn:
+                    prev = latest_intervals.get(dn, {})
+                    if iv.get("date","") >= prev.get("date",""):
+                        latest_intervals[dn] = iv
+
+            rows = []
+            for dn, iv in latest_intervals.items():
+                info = driver_map.get(dn, {})
+                rows.append({
+                    "pos":  iv.get("position") or 99,
+                    "num":  dn,
+                    "acr":  info.get("name_acronym","???"),
+                    "team": info.get("team_name",""),
+                    "gap":  iv.get("gap_to_leader", "-"),
+                    "int":  iv.get("interval", "-"),
+                })
+            rows.sort(key=lambda r: r["pos"])
+
+            if rows:
+                lines.append("\n### 현재 드라이버 순위")
+                lines.append("| P | # | 드라이버 | 팀 | 리더 갭 | 인터벌 |")
+                lines.append("|---|---|---------|-----|---------|--------|")
+                for r in rows[:10]:
+                    lines.append(
+                        f"| {r['pos']} | {r['num']} | {r['acr']} "
+                        f"| {r['team']} | {r['gap']} | {r['int']} |"
+                    )
+
+        result = "\n".join(lines)
+        return _cache(result)
+
+    except Exception:
+        return _cache(None)
+
+
 # ── 직접 답변 생성 (에이전트 우회) ─────────────────────────────────────
 _DIRECT_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 아래 F1 공식 데이터를 바탕으로 사용자 질문에 **한국어**로 답변하세요.
@@ -221,6 +378,29 @@ _DIRECT_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 데이터에 없는 내용은 추측하지 마세요.
 
 [F1 공식 데이터]
+{data}
+
+[사용자 질문]
+{question}"""
+
+_LIVE_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
+아래는 현재(또는 가장 최근) F1 세션의 실시간 공식 데이터입니다.
+이 데이터를 분석하여 사용자 질문에 **한국어**로 답변하세요.
+
+레이스 컨트롤 메시지 해석 가이드:
+- YELLOW / DOUBLE YELLOW : 황색기 — 해당 구간 위험, 추월 금지
+- RED FLAG : 적기 — 세션 즉시 중단, 피트레인으로 복귀
+- SAFETY CAR : 세이프티카 출동 (배포/회수)
+- VIRTUAL SAFETY CAR (VSC) : 버추얼 세이프티카 — 전 구간 델타 타임 제한
+- DRS DISABLED / ENABLED : DRS 사용 가능 여부
+- INCIDENT / UNDER INVESTIGATION : 사건 조사 중
+- TIME PENALTY / DRIVE THROUGH / STOP AND GO : 페널티 유형
+- 날씨(rainfall=True) : 빗길 — 사고 위험 증가 요인
+
+사고 원인 분석 시: 레이스 컨트롤 메시지의 시퀀스, 해당 랩 번호, 관련 드라이버 번호,
+날씨 조건, 드라이버 순위/갭 변화를 종합적으로 분석하세요.
+
+[실시간 세션 데이터]
 {data}
 
 [사용자 질문]
@@ -263,13 +443,14 @@ def _build_news_query(msg: str) -> str:
 
 def _try_direct_answer(message: str) -> str | None:
     """
-    구조화된 F1 쿼리를 감지하여 F1 API 또는 F1 뉴스 검색을 직접 호출하고,
+    구조화된 F1 쿼리를 감지하여 F1 API / 뉴스 검색 / 실시간 세션 데이터를 직접 호출하고,
     에이전트(도구 호출) 없이 LLM만으로 답변을 생성합니다.
     매칭되지 않으면 None을 반환하여 에이전트가 처리하도록 합니다.
     """
     msg = message.lower()
-    api_data: str | None = None
+    api_data:  str | None = None
     news_data: str | None = None
+    live_data: str | None = None
 
     # ① 시즌 일정 / 캘린더 / 다음 레이스
     if any(k in msg for k in [
@@ -344,6 +525,30 @@ def _try_direct_answer(message: str) -> str | None:
         except Exception:
             pass
 
+    # ⑦ 실시간 세션 질문 (사고·깃발·세이프티카·현재 상황 등)
+    elif any(k in msg for k in [
+        # 현재 시제 / 즉시성
+        '방금', '지금', '현재', '실시간', '이번 세션', '이번 랩',
+        # 실시간 이벤트
+        '세이프티카', '버추얼 세이프티카', 'vsc', 'sc 나왔',
+        '적기', '황기', '청기', '깃발',
+        '사고', '충돌', '크래시', '리타이어', '리타이어먼트',
+        '인시던트', '조사 중', '페널티 받',
+        # 현재 상태 질문
+        '현재 상황', '지금 상황', '현재 순위', '지금 순위',
+        '현재 갭', '지금 몇 등', '현재 날씨',
+    ]):
+        live_ctx = _fetch_live_context()
+        if live_ctx:
+            live_data = live_ctx
+        else:
+            # 라이브 세션 관련 질문이지만 세션 없음
+            return (
+                "현재 진행 중인 F1 세션이 없습니다. 📡\n\n"
+                "프랙티스·퀄리파잉·레이스 세션 중에 다시 질문해 주세요.\n"
+                "실시간 데이터는 **[Live Telemetry](/telemetry)** 탭에서도 확인할 수 있습니다."
+            )
+
     # ── 결과 반환 ──
     if api_data:
         try:
@@ -356,6 +561,14 @@ def _try_direct_answer(message: str) -> str | None:
     if news_data:
         try:
             prompt = _NEWS_PROMPT.format(data=news_data, question=message)
+            response = llm.invoke(prompt)
+            return response.content
+        except Exception:
+            pass
+
+    if live_data:
+        try:
+            prompt = _LIVE_PROMPT.format(data=live_data, question=message)
             response = llm.invoke(prompt)
             return response.content
         except Exception:
