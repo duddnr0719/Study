@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -87,6 +88,17 @@ def get_overview():
 
     session = sessions[-1]
     sk = session.get("session_key")
+
+    # 세션 신선도 체크: date_start가 8시간 이상 지났으면 활성 세션 아님
+    date_start = session.get("date_start", "")
+    if date_start:
+        try:
+            session_dt = datetime.fromisoformat(date_start.replace("Z", "+00:00"))
+            elapsed_h  = (datetime.now(timezone.utc) - session_dt).total_seconds() / 3600
+            if elapsed_h > 8:
+                return {"session": None, "drivers": [], "message": "활성 세션이 없습니다."}
+        except Exception:
+            pass
 
     # 5개 소스 병렬 호출
     sources = {
