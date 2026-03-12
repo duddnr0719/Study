@@ -22,6 +22,7 @@ from langchain_groq import ChatGroq
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.tools import tool
 
 # LangGraph 버전에 따라 import 경로 분기
@@ -65,7 +66,9 @@ app.include_router(telemetry_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ── 도구 설정 ─────────────────────────────────────────────────────────
-search = DuckDuckGoSearchRun()
+search = DuckDuckGoSearchRun(
+    api_wrapper=DuckDuckGoSearchAPIWrapper(region="us-en", time="w", max_results=6)
+)
 
 embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
 vector_db  = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
@@ -412,6 +415,8 @@ _LIVE_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 
 _NEWS_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 아래 F1 최신 뉴스 검색 결과를 바탕으로 사용자 질문에 **한국어**로 답변하세요.
+
+⚠️ 중요: 검색 결과에 일본어(カタカナ·ひらがな), 중국어(漢字), 아랍어 등 한국어·영어 이외의 문자가 포함되어 있으면 **반드시 한국어로 번역**하여 답변하세요. 원문 외국어 문자를 그대로 출력하지 마세요.
 
 답변 형식:
 - 주요 이슈/소식을 **굵은 글씨** 제목으로 구분하여 정리하세요.
