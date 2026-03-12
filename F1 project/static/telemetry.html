@@ -560,7 +560,7 @@
       const sel   = selectedDriver === d.driver_number ? 'selected' : '';
 
       html += `
-        <tr class="${sel}" onclick="selectDriver(${d.driver_number}, '${d.full_name}', '${d.team_name}', '${color}')">
+        <tr class="${sel}" onclick="selectDriver(this, ${d.driver_number}, '${d.full_name}', '${d.team_name}', '${color}')">
           <td class="pos-cell">${d.position ?? '-'}</td>
           <td><span class="driver-num-badge" style="background:${color};color:${d.team_colour === 'FFFFFF' || d.team_colour === 'ffffff' ? '#000' : '#fff'}">${d.driver_number}</span></td>
           <td>
@@ -601,11 +601,11 @@
   }
 
   // ── 차량 데이터 패널 ──────────────────────────────────────────────
-  function selectDriver(number, fullName, teamName, color) {
+  function selectDriver(el, number, fullName, teamName, color) {
     selectedDriver = number;
 
     document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
-    event.currentTarget.classList.add('selected');
+    el.classList.add('selected');
 
     document.getElementById('carBadge').textContent    = number;
     document.getElementById('carBadge').style.background = color;
@@ -713,7 +713,7 @@
   }
 
   async function refreshAll() {
-    await Promise.all([fetchOverview(), fetchRaceControl(), fetchWeather()]);
+    await Promise.allSettled([fetchOverview(), fetchRaceControl(), fetchWeather()]);
     // 선택된 드라이버 있으면 차량 데이터도 갱신
     if (selectedDriver !== null) fetchCarData(selectedDriver);
     document.getElementById('lastUpdate').textContent =

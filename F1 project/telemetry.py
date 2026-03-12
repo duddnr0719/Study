@@ -105,7 +105,10 @@ def get_overview():
         }
         for future in as_completed(futures):
             name = futures[future]
-            results[name] = future.result()
+            try:
+                results[name] = future.result(timeout=10)
+            except Exception:
+                results[name] = []
 
     drivers_raw   = results.get("drivers", [])
     intervals_raw = results.get("intervals", [])
@@ -174,7 +177,7 @@ def get_overview():
             "best_lap":        _fmt_lap(best_dur),
             "tyre_compound":   stint.get("compound", "-"),
             "tyre_laps":       stint.get("lap_number", "-"),  # stint 시작 랩
-            "tyre_age":        last_lap.get("lap_number", 0) if stint else 0,
+            "tyre_age":        max(0, last_lap.get("lap_number", 0) - stint.get("lap_number", 0)) if stint else 0,
             "pit_count":       pit_counts.get(dn, 0),
         })
 
