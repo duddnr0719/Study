@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from telemetry import router as telemetry_router
 
-from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.tools import DuckDuckGoSearchRun
@@ -47,7 +47,8 @@ from f1_api import (
 load_dotenv()
 
 # ── 설정 ──────────────────────────────────────────────────────────────
-LLM_MODEL        = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL        = os.getenv("OLLAMA_LLM_MODEL", "qwen3.5:122b")
+OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://100.66.16.106:11434")
 EMBEDDING_MODEL  = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 CHROMA_DIR       = os.getenv("CHROMA_DIR", "./chroma_db")
 OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
@@ -197,7 +198,7 @@ SYSTEM_PROMPT = """당신은 F1(포뮬러 원 월드 챔피언십) 전문가 AI 
 """
 
 # ── 에이전트 초기화 (MemorySaver로 대화 히스토리 유지) ─────────────────
-llm = ChatGroq(model=LLM_MODEL, temperature=0)
+llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
 checkpointer = MemorySaver()
 agent_executor = create_react_agent(llm, tools, prompt=SYSTEM_PROMPT, checkpointer=checkpointer)
 
