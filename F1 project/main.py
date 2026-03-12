@@ -50,6 +50,7 @@ LLM_MODEL        = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
 EMBEDDING_MODEL  = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 CHROMA_DIR       = os.getenv("CHROMA_DIR", "./chroma_db")
 OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
+CURRENT_SEASON   = os.getenv("F1_SEASON", str(datetime.now().year))
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────
 app = FastAPI(title="F1 Doctor Agentic AI", version="4.0")
@@ -287,7 +288,10 @@ def _fetch_live_context() -> str | None:
         with ThreadPoolExecutor(max_workers=4) as ex:
             futs = {ex.submit(_openf1, ep, p): name for name, (ep, p) in sources.items()}
             for fut in as_completed(futs):
-                results[futs[fut]] = fut.result()
+                try:
+                    results[futs[fut]] = fut.result(timeout=10)
+                except Exception:
+                    results[futs[fut]] = []
 
         rc_raw       = results.get("rc", [])
         intervals_raw= results.get("intervals", [])
@@ -423,7 +427,7 @@ _NEWS_PROMPT = """당신은 F1 전문가 AI 'F1 Doctor'입니다.
 
 def _build_news_query(msg: str) -> str:
     """메시지 키워드를 분석해 최적의 F1 뉴스 검색 쿼리를 구성합니다."""
-    base = "F1 Formula 1 2026"
+    base = f"F1 Formula 1 {CURRENT_SEASON}"
     if any(k in msg for k in ['이적', '계약', '트랜스퍼', 'transfer', '드라이버 변경']):
         return f"{base} driver transfer contract signing news"
     if any(k in msg for k in ['사고', '충돌', '크래시', 'crash', 'accident', '리타이어']):
@@ -459,7 +463,7 @@ def _try_direct_answer(message: str) -> str | None:
         '시즌 캘린더', '레이스 캘린더'
     ]):
         try:
-            raw = get_race_schedule.invoke({"season": "2026"})
+            raw = get_race_schedule.invoke({"season": CURRENT_SEASON})
             if _api_ok(raw):
                 api_data = raw
         except Exception:
@@ -631,7 +635,9 @@ async def chat_stream(request: ChatRequest):
     config = {"configurable": {"thread_id": thread_id}}
 
     # 구조화된 F1 쿼리는 에이전트 없이 직접 처리 (SSE로 스트리밍)
-    direct = _try_direct_answer(request.message)
+    # asyncio.to_thread: _try_direct_answer는 동기(blocking) 함수 — event loop 블록 방지
+    import asyncio
+    direct = await asyncio.to_thread(_try_direct_answer, request.message)
     if direct:
         async def direct_stream():
             chunk_size = 30
