@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import json
 import time
@@ -216,6 +217,13 @@ _F1_MARKERS = ['formula 1', 'grand prix', ' f1 ', 'fia', 'constructor',
 def _is_f1_content(text: str) -> bool:
     """텍스트가 F1 관련 내용인지 검증합니다."""
     return any(m in text.lower() for m in _F1_MARKERS)
+
+# 히라가나(\u3040-\u309F) · 카타카나(\u30A0-\u30FF) 제거
+_JP_PATTERN = re.compile(r'[\u3040-\u30FF]+')
+
+def _strip_japanese(text: str) -> str:
+    """LLM 출력에서 일본어(히라가나·카타카나) 문자를 제거합니다."""
+    return _JP_PATTERN.sub('', text)
 
 def _api_ok(data: str) -> bool:
     """API 반환값이 실제 데이터인지(오류 메시지가 아닌지) 확인합니다."""
@@ -572,7 +580,7 @@ def _try_direct_answer(message: str) -> str | None:
         try:
             prompt = _NEWS_PROMPT.format(data=news_data, question=message)
             response = llm.invoke(prompt)
-            return response.content
+            return _strip_japanese(response.content)
         except Exception:
             pass
 

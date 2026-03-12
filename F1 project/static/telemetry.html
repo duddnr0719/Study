@@ -353,6 +353,43 @@
     .drs-on  { color: #39b54a; }
     .drs-off { color: var(--muted); }
 
+    /* ── No-Session Screen ── */
+    #noSessionScreen {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      text-align: center;
+      padding: 40px 20px;
+    }
+    #noSessionScreen .ns-icon { font-size: 4rem; line-height: 1; }
+    #noSessionScreen h2 { font-size: 1.3rem; font-weight: 700; }
+    #noSessionScreen p { color: var(--muted); font-size: 0.88rem; max-width: 340px; line-height: 1.6; }
+    .ns-check { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    .ns-btn {
+      margin-top: 6px;
+      padding: 10px 26px;
+      background: var(--red);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .ns-btn:hover { opacity: 0.85; }
+
+    /* ── Dashboard wrapper ── */
+    #dashboard {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+
     /* ── Responsive ── */
     @media (max-width: 768px) {
       .main-grid { grid-template-columns: 1fr; grid-template-rows: auto auto; }
@@ -382,6 +419,18 @@
     </div>
   </div>
 </header>
+
+<!-- ── No Session Screen ── -->
+<div id="noSessionScreen">
+  <div class="ns-icon">📡</div>
+  <h2>현재 진행 중인 세션이 없습니다</h2>
+  <p>프랙티스·퀄리파잉·레이스 세션이 시작되면<br>자동으로 라이브 데이터가 표시됩니다.</p>
+  <button class="ns-btn" onclick="manualCheck()">지금 다시 확인</button>
+  <span class="ns-check" id="nsLastCheck">확인 중...</span>
+</div>
+
+<!-- ── Dashboard (세션 활성 시 표시) ── -->
+<div id="dashboard" style="display:none">
 
 <!-- ── Weather Strip ── -->
 <div id="weatherStrip">
@@ -432,11 +481,14 @@
 
 </div><!-- /main-grid -->
 
+</div><!-- /dashboard -->
+
 <script>
   // ── 상태 ──────────────────────────────────────────────────────────
-  let refreshEnabled = true;
+  let refreshEnabled  = true;
   let refreshInterval = null;
-  let selectedDriver = null;
+  let selectedDriver  = null;
+  let sessionActive   = null; // null=미확인, false=없음, true=활성
 
   // ── 유틸 ──────────────────────────────────────────────────────────
   function fmtTime(date) {
@@ -671,14 +723,71 @@
     `;
   }
 
+  // ── 세션 상태 표시 ────────────────────────────────────────────────
+  function showNoSession() {
+    document.getElementById('noSessionScreen').style.display = 'flex';
+    document.getElementById('dashboard').style.display       = 'none';
+    document.getElementById('sessionTitle').textContent = '🏁 F1 Live Telemetry';
+    document.getElementById('sessionSub').textContent   = '활성 세션 없음';
+    document.getElementById('nsLastCheck').textContent  =
+      '마지막 확인: ' + new Date().toLocaleTimeString('ko-KR');
+    // 세션 없을 때는 30초마다 느리게 폴링
+    if (refreshEnabled) {
+      clearInterval(refreshInterval);
+      refreshInterval = setInterval(checkForSession, 30000);
+    }
+  }
+
+  function showDashboard() {
+    document.getElementById('noSessionScreen').style.display = 'none';
+    document.getElementById('dashboard').style.display       = 'flex';
+    // 세션 활성 시 5초 폴링으로 전환
+    if (refreshEnabled) {
+      clearInterval(refreshInterval);
+      refreshInterval = setInterval(refreshAll, 5000);
+    }
+  }
+
+  async function checkForSession() {
+    // 세션 없을 때의 단순 확인 (overview만 호출)
+    await fetchOverview();
+    document.getElementById('lastUpdate').textContent =
+      '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+  }
+
+  async function manualCheck() {
+    document.getElementById('nsLastCheck').textContent = '확인 중...';
+    await checkForSession();
+  }
+
   // ── API 호출 ──────────────────────────────────────────────────────
   async function fetchOverview() {
     try {
       const res  = await fetch('/api/live/overview');
       const data = await res.json();
+
+      if (!data.session) {
+        if (sessionActive !== false) {
+          sessionActive = false;
+          showNoSession();
+        } else {
+          // 이미 no-session 상태 → 시간만 업데이트
+          document.getElementById('nsLastCheck').textContent =
+            '마지막 확인: ' + new Date().toLocaleTimeString('ko-KR');
+        }
+        return false;
+      }
+
+      // 세션 있음
+      if (sessionActive !== true) {
+        sessionActive = true;
+        showDashboard();
+      }
       renderDrivers(data.session, data.drivers);
+      return true;
     } catch (e) {
       console.error('overview error:', e);
+      return false;
     }
   }
 
@@ -728,7 +837,7 @@
 
     if (refreshEnabled) {
       pill.classList.add('on');
-      label.textContent = '5초 자동갱신';
+      label.textContent = sessionActive === false ? '30초 자동갱신' : '5초 자동갱신';
       startRefresh();
     } else {
       pill.classList.remove('on');
@@ -740,12 +849,25 @@
 
   function startRefresh() {
     clearInterval(refreshInterval);
-    refreshInterval = setInterval(refreshAll, 5000);
+    if (sessionActive === false) {
+      refreshInterval = setInterval(checkForSession, 30000);
+    } else {
+      refreshInterval = setInterval(refreshAll, 5000);
+    }
   }
 
   // ── 초기 로드 ─────────────────────────────────────────────────────
-  refreshAll();
-  startRefresh();
+  async function init() {
+    const hasSession = await fetchOverview();
+    if (hasSession) {
+      await Promise.allSettled([fetchRaceControl(), fetchWeather()]);
+    }
+    document.getElementById('lastUpdate').textContent =
+      '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+    startRefresh();
+  }
+
+  init();
 </script>
 </body>
 </html>
