@@ -25,6 +25,7 @@ from langchain_chroma import Chroma
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.tools import tool
+from langchain_tavily import TavilySearch
 
 # LangGraph 버전에 따라 import 경로 분기
 try:
@@ -68,9 +69,38 @@ app.include_router(telemetry_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ── 도구 설정 ─────────────────────────────────────────────────────────
-search = DuckDuckGoSearchRun(
-    api_wrapper=DuckDuckGoSearchAPIWrapper(region="us-en", time="w", max_results=6)
-)
+_ddg_wrapper = DuckDuckGoSearchAPIWrapper(region="us-en", time="m", max_results=10)
+_ddg_raw     = DuckDuckGoSearchRun(api_wrapper=_ddg_wrapper)
+
+# Tavily 초기화 — API 키 없을 시 DuckDuckGo 전용으로 폴백
+try:
+    _tavily     = TavilySearch(max_results=10)
+    _use_tavily = True
+except Exception:
+    _tavily     = None
+    _use_tavily = False
+
+def _run_search(query: str) -> str:
+    """쿼리에 F1 키워드 자동 추가 후 Tavily 우선 검색, 실패 시 DuckDuckGo 폴백."""
+    q_lower = query.lower()
+    if "f1" not in q_lower and "formula 1" not in q_lower and "formula one" not in q_lower:
+        query = f"F1 Formula 1 {query}"
+    if _use_tavily:
+        try:
+            result = _tavily.invoke({"query": query})
+            if isinstance(result, list) and result:
+                return "\n\n".join(
+                    r.get("content", "") for r in result if r.get("content")
+                )
+        except Exception:
+            pass
+    return _ddg_raw.run(query)
+
+@tool
+def search(query: str) -> str:
+    """F1 Formula 1 관련 최신 뉴스와 정보를 웹에서 검색합니다.
+    쿼리는 영어로 작성하고 F1 또는 Formula 1 키워드를 포함하세요."""
+    return _run_search(query)
 
 embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
 vector_db  = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
@@ -537,7 +567,7 @@ def _try_direct_answer(message: str) -> str | None:
     ]):
         try:
             query = _build_news_query(msg)
-            result = search.run(query)
+            result = _run_search(query)
             if result and _is_f1_content(result):
                 news_data = result
         except Exception:
@@ -545,7 +575,7 @@ def _try_direct_answer(message: str) -> str | None:
 
     # ⑦ 실시간 세션 질문 (사고·깃발·세이프티카·현재 상황 등)
     elif any(k in msg for k in [
-        # 현재 시제 / 즉시성
+        # 현재 시제 / 즉시성 (명확한 라이브 키워드)
         '방금', '지금', '현재', '실시간', '이번 세션', '이번 랩',
         # 실시간 이벤트
         '세이프티카', '버추얼 세이프티카', 'vsc', 'sc 나왔',
@@ -560,12 +590,24 @@ def _try_direct_answer(message: str) -> str | None:
         if live_ctx:
             live_data = live_ctx
         else:
-            # 라이브 세션 관련 질문이지만 세션 없음
-            return (
-                "현재 진행 중인 F1 세션이 없습니다. 📡\n\n"
-                "프랙티스·퀄리파잉·레이스 세션 중에 다시 질문해 주세요.\n"
-                "실시간 데이터는 **[Live Telemetry](/telemetry)** 탭에서도 확인할 수 있습니다."
-            )
+            # 라이브 세션 없음 — 명확한 "지금/현재/실시간" 키워드 없으면 뉴스 검색으로 폴백
+            live_only_keywords = ['방금', '지금', '현재', '실시간', '이번 세션', '이번 랩',
+                                  '현재 상황', '지금 상황', '현재 순위', '지금 순위',
+                                  '현재 갭', '지금 몇 등', '현재 날씨', 'sc 나왔']
+            if any(k in msg for k in live_only_keywords):
+                return (
+                    "현재 진행 중인 F1 세션이 없습니다. 📡\n\n"
+                    "프랙티스·퀄리파잉·레이스 세션 중에 다시 질문해 주세요.\n"
+                    "실시간 데이터는 **[Live Telemetry](/telemetry)** 탭에서도 확인할 수 있습니다."
+                )
+            # 사고/충돌 등 과거 이벤트 관련 → 뉴스 검색으로 처리
+            try:
+                query = _build_news_query(msg)
+                result = _run_search(query)
+                if result and _is_f1_content(result):
+                    news_data = result
+            except Exception:
+                pass
 
     # ── 결과 반환 ──
     if api_data:
@@ -598,8 +640,11 @@ def _try_direct_answer(message: str) -> str | None:
 # ── 웹 검색 폴백 헬퍼 ─────────────────────────────────────────────────
 def _web_search_fallback(query: str) -> str:
     try:
-        result = search.run(query)
-        summary_prompt = f"다음 웹 검색 결과를 바탕으로 '{query}' 질문에 한국어로 간결하게 답변해 주세요:\n\n{result}"
+        result = _run_search(query)
+        summary_prompt = (
+            f"당신은 F1 전문가 AI입니다. 다음 F1 웹 검색 결과를 바탕으로 "
+            f"'{query}' 질문에 **한국어**로 간결하게 답변해 주세요:\n\n{result}"
+        )
         response = llm.invoke(summary_prompt)
         return response.content
     except Exception as e:

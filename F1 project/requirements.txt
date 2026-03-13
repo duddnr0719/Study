@@ -25,3 +25,7 @@ chromadb==1.5.1
 
 # PDF 처리 (ingest.py)
 pypdf==6.7.1
+
+# 웹 검색 (Tavily 우선, DuckDuckGo 폴백)
+langchain-tavily>=0.2.0
+aiohttp>=3.9.0
