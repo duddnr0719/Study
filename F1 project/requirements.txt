@@ -28,4 +28,4 @@ pypdf==6.7.1
 
 # 웹 검색 (Tavily 우선, DuckDuckGo 폴백)
 langchain-tavily>=0.2.0
-aiohttp>=3.9.0
+aiohttp>=3.9.0  # SignalR Core WebSocket 클라이언트 겸용

@@ -4,7 +4,7 @@ uvicorn[standard]
 
 # Database
 sqlalchemy
-psycopg2-binary  # PostgreSQL 연동용
+# psycopg2-binary  # PostgreSQL 연동 시 주석 해제 (현재 SQLite 사용 중)
 alembic         # DB 마이그레이션 관리
 
 # AI & LLM

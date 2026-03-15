@@ -3,10 +3,13 @@ import re
 import uuid
 import json
 import time
+import asyncio
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import requests
 from dotenv import load_dotenv
@@ -18,6 +21,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from telemetry import router as telemetry_router
+import live_state as ls
+from f1_signalr import F1SignalRClient
 
 from langchain_ollama import ChatOllama
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -56,8 +61,159 @@ CHROMA_DIR       = os.getenv("CHROMA_DIR", "./chroma_db")
 OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
 CURRENT_SEASON   = os.getenv("F1_SEASON", str(datetime.now().year))
 
+# ── F1 SignalR 메시지 핸들러 ──────────────────────────────────────────
+
+def _deep_merge(base: dict, update: dict) -> dict:
+    """SignalR 부분 업데이트(diff)를 기존 상태에 딥 머지."""
+    for k, v in update.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+async def _on_f1_message(topic: str, payload: Any) -> None:
+    """F1 SignalR 토픽별 메시지를 live_state에 반영."""
+    if not isinstance(payload, dict):
+        return
+
+    async with ls.live_lock:
+        # ── SessionInfo ─────────────────────────────────────────────
+        if topic == "SessionInfo":
+            meeting = payload.get("Meeting", {})
+            country = meeting.get("Country", {})
+            circuit = meeting.get("Circuit", {})
+            path    = payload.get("Path", "")
+            # Path 형식: "2024/2024-03-02_Bahrain_Grand_Prix/2024-03-02_Race/"
+            year = path.split("/")[0] if path else str(datetime.now().year)
+            ls.live_state["session"] = {
+                "year":         year,
+                "country":      country.get("Name", meeting.get("Location", "")),
+                "circuit":      circuit.get("ShortName", meeting.get("Location", "")),
+                "session_name": payload.get("Name", ""),
+                "session_type": payload.get("Type", ""),
+                "gmt_offset":   payload.get("GmtOffset", ""),
+                "start_date":   payload.get("StartDate", ""),
+            }
+            ls.live_state["active"] = True
+
+        # ── DriverList ───────────────────────────────────────────────
+        elif topic == "DriverList":
+            for num, info in payload.items():
+                if isinstance(info, dict) and num.isdigit():
+                    existing = ls.live_state["drivers"].get(num, {})
+                    _deep_merge(existing, info)
+                    ls.live_state["drivers"][num] = existing
+
+        # ── TimingData ───────────────────────────────────────────────
+        elif topic == "TimingData":
+            lines = payload.get("Lines", {})
+            for num, data in lines.items():
+                if isinstance(data, dict):
+                    existing = ls.live_state["timing"].get(num, {})
+                    _deep_merge(existing, data)
+                    ls.live_state["timing"][num] = existing
+
+        # ── TimingAppData ────────────────────────────────────────────
+        elif topic == "TimingAppData":
+            lines = payload.get("Lines", {})
+            for num, data in lines.items():
+                if isinstance(data, dict):
+                    existing = ls.live_state["timing_app"].get(num, {})
+                    _deep_merge(existing, data)
+                    ls.live_state["timing_app"][num] = existing
+
+        # ── CarData ──────────────────────────────────────────────────
+        # Channel 0=Speed, 2=RPM, 3=Gear, 4=Brake, 5=Throttle, 45=DRS
+        elif topic == "CarData":
+            from collections import deque
+            entries = payload.get("Entries", [])
+            for entry in entries:
+                utc   = entry.get("Utc", "")
+                cars  = entry.get("Cars", {})
+                for num, car_info in cars.items():
+                    channels = car_info.get("Channels", {})
+                    if not channels:
+                        continue
+                    point = {
+                        "utc":      utc,
+                        "speed":    channels.get("0", channels.get(0, 0)),
+                        "rpm":      channels.get("2", channels.get(2, 0)),
+                        "gear":     channels.get("3", channels.get(3, 0)),
+                        "brake":    channels.get("4", channels.get(4, 0)),
+                        "throttle": channels.get("5", channels.get(5, 0)),
+                        "drs":      channels.get("45", channels.get(45, 0)),
+                    }
+                    if num not in ls.live_state["car_data"]:
+                        ls.live_state["car_data"][num] = deque(maxlen=30)
+                    ls.live_state["car_data"][num].append(point)
+
+        # ── RaceControlMessages ──────────────────────────────────────
+        elif topic == "RaceControlMessages":
+            messages = payload.get("Messages", {})
+            if isinstance(messages, dict):
+                items = list(messages.values())
+            elif isinstance(messages, list):
+                items = messages
+            else:
+                items = []
+            for m in items:
+                if isinstance(m, dict):
+                    ls.live_state["race_control"].append({
+                        "utc":      m.get("Utc", ""),
+                        "lap":      m.get("Lap") or m.get("LapNumber", "-"),
+                        "flag":     m.get("Flag", ""),
+                        "category": m.get("Category", ""),
+                        "message":  m.get("Message", ""),
+                        "driver":   m.get("RacingNumber", ""),
+                    })
+
+        # ── WeatherData ──────────────────────────────────────────────
+        elif topic == "WeatherData":
+            ls.live_state["weather"] = {
+                "air_temp":       payload.get("AirTemp", "-"),
+                "track_temp":     payload.get("TrackTemp", "-"),
+                "humidity":       payload.get("Humidity", "-"),
+                "pressure":       payload.get("Pressure", "-"),
+                "rainfall":       payload.get("Rainfall", False),
+                "wind_speed":     payload.get("WindSpeed", "-"),
+                "wind_direction": payload.get("WindDirection", "-"),
+            }
+
+        # ── TrackStatus ──────────────────────────────────────────────
+        elif topic == "TrackStatus":
+            if ls.live_state["session"] is None:
+                ls.live_state["session"] = {}
+            ls.live_state["session"]["track_status"] = payload.get("Message", "")
+
+
+async def _run_f1_signalr() -> None:
+    """F1 SignalR Core 백그라운드 태스크 — 연결 유지 + live_state 업데이트."""
+    client = F1SignalRClient()
+    try:
+        await client.run(on_message=_on_f1_message)
+    except asyncio.CancelledError:
+        client.stop()
+        raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI 앱 수명 주기 관리 — F1 SignalR 백그라운드 태스크 시작/종료."""
+    task = asyncio.create_task(_run_f1_signalr())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────
-app = FastAPI(title="F1 Doctor Agentic AI", version="4.0")
+app = FastAPI(title="F1 Doctor Agentic AI", version="4.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
@@ -280,9 +436,9 @@ def _openf1(endpoint: str, params: dict = None) -> list:
 
 def _fetch_live_context() -> str | None:
     """
-    OpenF1에서 최신 F1 세션 데이터를 가져와 LLM 컨텍스트 문자열로 반환합니다.
-    세션이 없거나 24시간 이상 지난 경우 None 반환. 30초 캐시 적용.
-    포함 데이터: 세션 정보 · 레이스 컨트롤 메시지 · 드라이버 포지션 · 날씨
+    live_state(F1 SignalR 실시간 데이터)에서 세션 컨텍스트를 읽어 LLM용 문자열로 반환.
+    활성 세션이 없으면 None 반환. 30초 캐시 적용.
+    포함 데이터: 세션 정보 · 레이스 컨트롤 메시지 · 드라이버 순위 · 날씨
     """
     global _live_ctx_cache
     now = time.time()
@@ -295,120 +451,59 @@ def _fetch_live_context() -> str | None:
         return val
 
     try:
-        sessions = _openf1("sessions", {"session_key": "latest"})
-        if not sessions:
+        if not ls.live_state["active"] or not ls.live_state["session"]:
             return _cache(None)
 
-        session = sessions[-1]
-        sk = session.get("session_key")
+        session = ls.live_state["session"]
+        drivers = ls.build_overview_drivers()
+        rc_msgs  = ls.build_race_control()
+        weather  = ls.build_weather()
 
-        # 24시간 이상 지난 세션은 무시
-        date_start_str = session.get("date_start", "")
-        if date_start_str:
-            try:
-                ds = datetime.fromisoformat(date_start_str.replace("Z", "+00:00"))
-                hours_ago = (datetime.now(timezone.utc) - ds).total_seconds() / 3600
-                if hours_ago > 24:
-                    return _cache(None)
-            except Exception:
-                pass
-
-        session_name = session.get("session_name", "")
-        session_type = session.get("session_type", "")
-        location     = session.get("location", "")
-        country      = session.get("country_name", "")
-        year         = session.get("year", "")
-
-        # 병렬 호출: 레이스 컨트롤 + 인터벌 + 드라이버 + 날씨
-        sources = {
-            "rc":       ("race_control", {"session_key": sk}),
-            "intervals":("intervals",    {"session_key": sk}),
-            "drivers":  ("drivers",      {"session_key": sk}),
-            "weather":  ("weather",      {"session_key": sk}),
-        }
-        results: dict = {}
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futs = {ex.submit(_openf1, ep, p): name for name, (ep, p) in sources.items()}
-            for fut in as_completed(futs):
-                try:
-                    results[futs[fut]] = fut.result(timeout=10)
-                except Exception:
-                    results[futs[fut]] = []
-
-        rc_raw       = results.get("rc", [])
-        intervals_raw= results.get("intervals", [])
-        drivers_raw  = results.get("drivers", [])
-        weather_raw  = results.get("weather", [])
+        year    = session.get("year", "")
+        country = session.get("country", "")
+        circuit = session.get("circuit", "")
+        sname   = session.get("session_name", "")
+        stype   = session.get("session_type", "")
 
         lines = [
-            f"## F1 세션 정보",
-            f"- 이벤트: {year} {country} GP — {location} / {session_name} ({session_type})",
-            f"- 세션 키: {sk}",
+            "## F1 세션 정보",
+            f"- 이벤트: {year} {country} GP — {circuit} / {sname} ({stype})",
         ]
 
         # ── 날씨 ──────────────────────────────────────────────────────
-        if weather_raw:
-            w = sorted(weather_raw, key=lambda r: r.get("date", ""), reverse=True)[0]
-            rain = "🌧 비" if w.get("rainfall") else "☀ 맑음"
+        if weather:
+            rain = "🌧 비" if weather.get("rainfall") else "☀ 맑음"
             lines.append(
-                f"- 날씨: {rain} | 트랙 {w.get('track_temperature','?')}°C "
-                f"| 기온 {w.get('air_temperature','?')}°C "
-                f"| 습도 {w.get('humidity','?')}%"
+                f"- 날씨: {rain} | 트랙 {weather.get('track_temp', '?')}°C "
+                f"| 기온 {weather.get('air_temp', '?')}°C "
+                f"| 습도 {weather.get('humidity', '?')}%"
             )
 
         # ── 레이스 컨트롤 메시지 ──────────────────────────────────────
-        if rc_raw:
-            rc_sorted = sorted(rc_raw, key=lambda r: r.get("date",""), reverse=True)[:25]
-            rc_sorted.reverse()
+        if rc_msgs:
+            recent_rc = list(reversed(rc_msgs))[:25]
+            recent_rc.reverse()
             lines.append("\n### 레이스 컨트롤 메시지 (시간 순)")
             lines.append("| 랩 | 플래그 | 메시지 | 드라이버# |")
             lines.append("|-----|--------|--------|----------|")
-            for m in rc_sorted:
+            for m in recent_rc:
                 flag = m.get("flag") or m.get("category", "")
-                lap  = m.get("lap_number", "-")
+                lap  = m.get("lap", "-")
                 msg  = m.get("message", "")
-                dn   = m.get("driver_number", "-") or "-"
+                dn   = m.get("driver", "-") or "-"
                 lines.append(f"| {lap} | {flag} | {msg} | {dn} |")
 
         # ── 드라이버 현황 (상위 10위) ──────────────────────────────────
-        if intervals_raw and drivers_raw:
-            driver_map = {}
-            for d in drivers_raw:
-                dn = str(d.get("driver_number", ""))
-                if dn and dn not in driver_map:
-                    driver_map[dn] = d
-
-            # 최신 인터벌만 추출
-            latest_intervals: dict[str, dict] = {}
-            for iv in intervals_raw:
-                dn = str(iv.get("driver_number", ""))
-                if dn:
-                    prev = latest_intervals.get(dn, {})
-                    if iv.get("date","") >= prev.get("date",""):
-                        latest_intervals[dn] = iv
-
-            rows = []
-            for dn, iv in latest_intervals.items():
-                info = driver_map.get(dn, {})
-                rows.append({
-                    "pos":  iv.get("position") or 99,
-                    "num":  dn,
-                    "acr":  info.get("name_acronym","???"),
-                    "team": info.get("team_name",""),
-                    "gap":  iv.get("gap_to_leader", "-"),
-                    "int":  iv.get("interval", "-"),
-                })
-            rows.sort(key=lambda r: r["pos"])
-
-            if rows:
-                lines.append("\n### 현재 드라이버 순위")
-                lines.append("| P | # | 드라이버 | 팀 | 리더 갭 | 인터벌 |")
-                lines.append("|---|---|---------|-----|---------|--------|")
-                for r in rows[:10]:
-                    lines.append(
-                        f"| {r['pos']} | {r['num']} | {r['acr']} "
-                        f"| {r['team']} | {r['gap']} | {r['int']} |"
-                    )
+        if drivers:
+            lines.append("\n### 현재 드라이버 순위")
+            lines.append("| P | # | 드라이버 | 팀 | 리더 갭 | 인터벌 | 마지막 랩 | 타이어 |")
+            lines.append("|---|---|---------|-----|---------|--------|---------|------|")
+            for d in drivers[:10]:
+                lines.append(
+                    f"| {d['position'] or '-'} | {d['driver_number']} | {d['name_acronym']} "
+                    f"| {d['team_name']} | {d['gap_to_leader']} | {d['interval']} "
+                    f"| {d['last_lap']} | {d['tyre_compound']} |"
+                )
 
         result = "\n".join(lines)
         return _cache(result)
