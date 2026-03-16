@@ -29,3 +29,10 @@ pypdf==6.7.1
 # 웹 검색 (Tavily 우선, DuckDuckGo 폴백)
 langchain-tavily>=0.2.0
 aiohttp>=3.9.0  # SignalR Core WebSocket 클라이언트 겸용
+
+# 팀 라디오 전사 파이프라인 (Step 3)
+faster-whisper>=1.0.0   # GPU 기반 Whisper 전사 (CUDA 12GB VRAM 활용)
+streamlink>=7.0.0        # F1 TV Premium 스트림 URL 추출
+
+# 개발 / 테스트
+pytest>=9.0.0

@@ -30,3 +30,9 @@ dist/
 build/
 .next/
 out/
+
+# Cursor IDE
+.cursor/
+
+# Python 버전 관리 (pyenv 등)
+.python-version
