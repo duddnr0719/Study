@@ -23,6 +23,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import sys
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -59,6 +61,21 @@ _F1TV_LIVE_PAGE_URL = (
     "https://f1tv.formula1.com/2.0/R/ENG/BIG_SCREEN_HLS/ALL/PAGE/LIVE/F1_LIVE/2"
 )
 _CHANNEL_MAP_TTL = 300  # 5분 캐시 (세션 중에는 채널 ID가 불변)
+
+# ── 실행 파일 경로 해결 ────────────────────────────────────────────────
+def _find_bin(name: str) -> str:
+    """시스템 PATH → venv bin 순으로 실행 파일 위치 반환. 없으면 name 그대로."""
+    found = shutil.which(name)
+    if found:
+        return found
+    # venv 내 bin 디렉터리 직접 탐색 (streamlink 등 venv 전용 패키지)
+    venv_bin = Path(sys.executable).parent / name
+    if venv_bin.exists():
+        return str(venv_bin)
+    return name  # 없으면 원본 이름 반환 (FileNotFoundError로 감지)
+
+_STREAMLINK_BIN = _find_bin("streamlink")
+_FFMPEG_BIN     = _find_bin("ffmpeg")
 
 
 class F1TVAuth:
@@ -320,7 +337,7 @@ class RadioTranscriber:
             if not f1tv_url:
                 return None
             proc = await asyncio.create_subprocess_exec(
-                "streamlink",
+                _STREAMLINK_BIN,
                 "--stream-url",
                 "--f1tv-email",    self._email,
                 "--f1tv-password", self._password,
@@ -355,7 +372,7 @@ class RadioTranscriber:
                 tmp_path = tmp.name
 
             cmd = [
-                "ffmpeg", "-y",
+                _FFMPEG_BIN, "-y",
                 "-i",  stream_url,
                 "-t",  str(_SEGMENT_SECS),   # 세그먼트 길이
                 "-vn",                        # 비디오 제거
@@ -398,7 +415,7 @@ class RadioTranscriber:
         except asyncio.TimeoutError:
             logger.debug("FFmpeg 타임아웃 (드라이버 %s)", driver_num)
         except FileNotFoundError:
-            logger.warning("ffmpeg 미설치 — `brew install ffmpeg` 실행 필요")
+            logger.warning("ffmpeg 미설치 또는 경로 오류 (%s) — `brew install ffmpeg`", _FFMPEG_BIN)
         except Exception as e:
             logger.debug("오디오 캡처 오류 (드라이버 %s): %s", driver_num, e)
         finally:
