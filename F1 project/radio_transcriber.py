@@ -53,21 +53,12 @@ _WHISPER_DEVICE  = os.getenv("WHISPER_DEVICE",  "cuda")
 _WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "float16")
 _SEGMENT_SECS    = int(os.getenv("AUDIO_SEGMENT_S", "5"))
 
-# ── 드라이버 → F1TV 온보드 채널 ID 매핑 (시즌마다 업데이트 필요) ────────
-# F1 TV Premium 채널 ID는 시즌 시작 시 고정되며, 드라이버별로 다름.
-# https://f1tv.formula1.com 의 콘텐츠 API에서 확인 가능.
-_DRIVER_CHANNEL_IDS: dict[str, str] = {
-    "1":  "1000000817",   # Verstappen
-    "4":  "1000000818",   # Norris
-    "16": "1000000819",   # Leclerc
-    "44": "1000000820",   # Hamilton
-    "63": "1000000821",   # Russell
-    "55": "1000000822",   # Sainz
-    "81": "1000000823",   # Piastri
-    "14": "1000000824",   # Alonso
-    "10": "1000000825",   # Gasly
-    "31": "1000000826",   # Ocon
-}
+# ── F1TV 채널 목록 API ────────────────────────────────────────────────
+# 현재 라이브 이벤트의 온보드 채널을 나열함. 인증 헤더 필요.
+_F1TV_LIVE_PAGE_URL = (
+    "https://f1tv.formula1.com/2.0/R/ENG/BIG_SCREEN_HLS/ALL/PAGE/LIVE/F1_LIVE/2"
+)
+_CHANNEL_MAP_TTL = 300  # 5분 캐시 (세션 중에는 채널 ID가 불변)
 
 
 class F1TVAuth:
@@ -158,6 +149,9 @@ class RadioTranscriber:
         self._running  = False
         self._auth     = F1TVAuth(self._email, self._password)
         self._model    = None   # lazy-loaded
+        # {driver_number_str: content_id_str} — F1TV API 동적 조회 결과 캐시
+        self._channel_map: dict[str, str] = {}
+        self._channel_map_ts: float = 0.0
 
     # ── Whisper 모델 로드 ────────────────────────────────────────────────
 
@@ -210,6 +204,82 @@ class RadioTranscriber:
             logger.warning("전사 실패: %s", e)
             return ""
 
+    # ── 드라이버 채널 맵 동적 조회 ──────────────────────────────────────
+
+    async def _fetch_driver_channels(
+        self,
+        session: aiohttp.ClientSession,
+    ) -> dict[str, str]:
+        """
+        F1TV Live Page API에서 온보드 채널 목록 조회.
+        결과: {driver_number_str: content_id_str}
+        5분 캐시 적용 — 세션 중 채널 ID는 불변.
+        """
+        # 캐시 유효하면 그대로 반환
+        if self._channel_map and time.time() - self._channel_map_ts < _CHANNEL_MAP_TTL:
+            return self._channel_map
+
+        if not self._auth.token:
+            return self._channel_map  # 인증 전 — 빈 맵 유지
+
+        try:
+            headers = {
+                **_F1TV_HEADERS,
+                "Authorization": f"Bearer {self._auth.token}",
+            }
+            async with session.get(
+                _F1TV_LIVE_PAGE_URL,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug("F1TV 채널 목록 조회 실패 (HTTP %s)", resp.status)
+                    return self._channel_map
+                data = await resp.json()
+
+            # resultObj.containers 배열에서 온보드 채널 파싱
+            containers = (
+                data.get("resultObj", {})
+                    .get("containers", [])
+            )
+            new_map: dict[str, str] = {}
+            for container in containers:
+                meta       = container.get("metadata", {})
+                content_id = str(meta.get("contentId", ""))
+                if not content_id:
+                    continue
+
+                # driverNumber는 properties 배열 또는 metadata에 위치
+                driver_num = None
+                for prop in container.get("properties", []):
+                    if prop.get("driverNumber"):
+                        driver_num = str(prop["driverNumber"])
+                        break
+                if not driver_num:
+                    driver_num = str(meta.get("driverNumber", ""))
+
+                # channelType "obc" (OnBoard Camera) 만 포함
+                channel_type = ""
+                for prop in container.get("properties", []):
+                    if prop.get("channelType"):
+                        channel_type = prop["channelType"].lower()
+                        break
+
+                if driver_num and channel_type == "obc":
+                    new_map[driver_num] = content_id
+
+            if new_map:
+                self._channel_map    = new_map
+                self._channel_map_ts = time.time()
+                logger.info("F1TV 드라이버 채널 맵 갱신: %d개", len(new_map))
+            else:
+                logger.debug("F1TV 채널 목록 응답에서 obc 채널 없음 (containers=%d)", len(containers))
+
+        except Exception as e:
+            logger.debug("F1TV 채널 맵 조회 오류: %s", e)
+
+        return self._channel_map
+
     # ── 스트림 URL 조회 ──────────────────────────────────────────────────
 
     async def _get_stream_url_via_api(
@@ -245,7 +315,10 @@ class RadioTranscriber:
     async def _get_stream_url_via_streamlink(self, driver_num: str) -> Optional[str]:
         """streamlink F1 TV 플러그인으로 HLS URL 추출 (fallback)."""
         try:
-            f1tv_url = f"https://f1tv.formula1.com/detail/{_DRIVER_CHANNEL_IDS.get(driver_num, '')}"
+            channel_id = self._channel_map.get(driver_num, "")
+            f1tv_url = f"https://f1tv.formula1.com/detail/{channel_id}" if channel_id else ""
+            if not f1tv_url:
+                return None
             proc = await asyncio.create_subprocess_exec(
                 "streamlink",
                 "--stream-url",
@@ -339,8 +412,13 @@ class RadioTranscriber:
         session: aiohttp.ClientSession,
         driver_num: str,
     ) -> Optional[str]:
-        """F1TV Content API → streamlink 순으로 스트림 URL 조회."""
-        channel_id = _DRIVER_CHANNEL_IDS.get(driver_num)
+        """
+        드라이버 번호 → HLS 스트림 URL.
+        우선순위: F1TV Content API (동적 채널맵) → streamlink 폴백.
+        """
+        # 채널 맵이 비어 있으면 먼저 갱신
+        channel_map = await self._fetch_driver_channels(session)
+        channel_id  = channel_map.get(driver_num)
         if channel_id:
             url = await self._get_stream_url_via_api(session, channel_id)
             if url:
