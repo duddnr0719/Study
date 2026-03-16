@@ -19,9 +19,27 @@ live_state: dict[str, Any] = {
     "car_data":     {},      # racing_number str → deque(maxlen=30)
     "race_control": deque(maxlen=50),   # RC 메시지 deque
     "weather":      None,    # 날씨 dict
+    "team_radio":   deque(maxlen=50),   # 팀 라디오 전사 결과 deque (Step 3)
 }
 
 live_lock = asyncio.Lock()
+
+
+# ── 유틸리티 ─────────────────────────────────────────────────────────────
+
+def deep_merge(base: dict, update: dict) -> dict:
+    """SignalR 부분 업데이트(diff)를 기존 상태에 딥 머지.
+
+    - update의 값이 dict이고 base에도 같은 키의 dict가 있으면 재귀적으로 머지.
+    - 그 외에는 base[k]를 update[k]로 덮어씀.
+    - base를 직접 수정하고 반환함.
+    """
+    for k, v in update.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
 
 
 # ── 헬퍼 ────────────────────────────────────────────────────────────────
@@ -131,3 +149,8 @@ def build_race_control() -> list[dict]:
 
 def build_weather() -> dict | None:
     return live_state["weather"]
+
+
+def build_team_radio(limit: int = 10) -> list[dict]:
+    """live_state team_radio → 최근 N개 전사 목록 반환."""
+    return list(live_state["team_radio"])[-limit:]

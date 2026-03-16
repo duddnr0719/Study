@@ -4,6 +4,7 @@ import uuid
 import json
 import time
 import asyncio
+import logging
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from pydantic import BaseModel
 from telemetry import router as telemetry_router
 import live_state as ls
 from f1_signalr import F1SignalRClient
+from radio_transcriber import RadioTranscriber
 
 from langchain_ollama import ChatOllama
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -53,6 +55,9 @@ from f1_api import (
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
 # ── 설정 ──────────────────────────────────────────────────────────────
 LLM_MODEL        = os.getenv("OLLAMA_LLM_MODEL", "qwen3.5:122b")
 OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://100.66.16.106:11434")
@@ -62,16 +67,6 @@ OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
 CURRENT_SEASON   = os.getenv("F1_SEASON", str(datetime.now().year))
 
 # ── F1 SignalR 메시지 핸들러 ──────────────────────────────────────────
-
-def _deep_merge(base: dict, update: dict) -> dict:
-    """SignalR 부분 업데이트(diff)를 기존 상태에 딥 머지."""
-    for k, v in update.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            _deep_merge(base[k], v)
-        else:
-            base[k] = v
-    return base
-
 
 async def _on_f1_message(topic: str, payload: Any) -> None:
     """F1 SignalR 토픽별 메시지를 live_state에 반영."""
@@ -103,7 +98,7 @@ async def _on_f1_message(topic: str, payload: Any) -> None:
             for num, info in payload.items():
                 if isinstance(info, dict) and num.isdigit():
                     existing = ls.live_state["drivers"].get(num, {})
-                    _deep_merge(existing, info)
+                    ls.deep_merge(existing, info)
                     ls.live_state["drivers"][num] = existing
 
         # ── TimingData ───────────────────────────────────────────────
@@ -112,7 +107,7 @@ async def _on_f1_message(topic: str, payload: Any) -> None:
             for num, data in lines.items():
                 if isinstance(data, dict):
                     existing = ls.live_state["timing"].get(num, {})
-                    _deep_merge(existing, data)
+                    ls.deep_merge(existing, data)
                     ls.live_state["timing"][num] = existing
 
         # ── TimingAppData ────────────────────────────────────────────
@@ -121,7 +116,7 @@ async def _on_f1_message(topic: str, payload: Any) -> None:
             for num, data in lines.items():
                 if isinstance(data, dict):
                     existing = ls.live_state["timing_app"].get(num, {})
-                    _deep_merge(existing, data)
+                    ls.deep_merge(existing, data)
                     ls.live_state["timing_app"][num] = existing
 
         # ── CarData ──────────────────────────────────────────────────
@@ -198,18 +193,30 @@ async def _run_f1_signalr() -> None:
         raise
 
 
+async def _run_radio_transcriber() -> None:
+    """팀 라디오 전사 백그라운드 태스크."""
+    transcriber = RadioTranscriber()
+    try:
+        await transcriber.run()
+    except asyncio.CancelledError:
+        transcriber.stop()
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI 앱 수명 주기 관리 — F1 SignalR 백그라운드 태스크 시작/종료."""
-    task = asyncio.create_task(_run_f1_signalr())
+    """FastAPI 앱 수명 주기 관리 — F1 SignalR + 팀 라디오 백그라운드 태스크 시작/종료."""
+    signalr_task = asyncio.create_task(_run_f1_signalr())
+    radio_task   = asyncio.create_task(_run_radio_transcriber())
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in (signalr_task, radio_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────
@@ -232,7 +239,8 @@ _ddg_raw     = DuckDuckGoSearchRun(api_wrapper=_ddg_wrapper)
 try:
     _tavily     = TavilySearch(max_results=10)
     _use_tavily = True
-except Exception:
+except Exception as e:
+    logger.info("Tavily 미사용 — DuckDuckGo 단독 모드 (사유: %s)", e)
     _tavily     = None
     _use_tavily = False
 
@@ -248,8 +256,8 @@ def _run_search(query: str) -> str:
                 return "\n\n".join(
                     r.get("content", "") for r in result if r.get("content")
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Tavily 검색 실패, DuckDuckGo 폴백: %s", e)
     return _ddg_raw.run(query)
 
 @tool
@@ -278,6 +286,25 @@ def search_regulations(query: str) -> str:
         results.append(f"{header}\n{doc.page_content}")
     return "\n\n---\n\n".join(results)
 
+@tool
+def get_team_radio(limit: int = 10) -> str:
+    """현재 세션의 팀 라디오 전사 결과를 반환합니다.
+    드라이버와 팀 간의 실시간 무선 통신을 텍스트로 제공합니다.
+    limit: 반환할 최근 메시지 수 (기본값 10, 최대 50)."""
+    if not ls.live_state["active"]:
+        return "현재 진행 중인 F1 세션이 없습니다."
+    msgs = ls.build_team_radio(limit=min(limit, 50))
+    if not msgs:
+        return "팀 라디오 전사 데이터가 없습니다. (F1TV_EMAIL/F1TV_PASSWORD 설정 확인)"
+    lines = ["## 팀 라디오 전사", "| 시각(UTC) | 드라이버# | 내용 |", "|-----------|----------|------|"]
+    for r in msgs:
+        utc    = r.get("utc", "")[:19].replace("T", " ")
+        driver = r.get("driver", "-")
+        text   = r.get("text", "")
+        lines.append(f"| {utc} | #{driver} | {text} |")
+    return "\n".join(lines)
+
+
 tools = [
     get_driver_standings,
     get_constructor_standings,
@@ -287,6 +314,7 @@ tools = [
     get_pitstops,
     compare_drivers,
     get_live_telemetry,
+    get_team_radio,
     search_regulations,
     search
 ]
@@ -317,6 +345,7 @@ SYSTEM_PROMPT = """당신은 F1(포뮬러 원 월드 챔피언십) 전문가 AI 
 | FIA 규정 / 기술 규정 | `search_regulations(query=...)` | duckduckgo_search |
 | 최신 뉴스 / 이적 / 루머 | duckduckgo_search (직접 사용) | — |
 | 프리시즌 테스트 / 비공식 세션 | duckduckgo_search (직접 사용) | — |
+| 팀 라디오 / 드라이버 무선 통신 | `get_team_radio(limit=...)` | — |
 
 ⚠️ **duckduckgo_search는 위 표에서 2순위로 지정된 경우에만 사용합니다.**
 ⚠️ **"시즌 일정"을 물어보면 절대 duckduckgo_search를 먼저 사용하지 마세요. get_race_schedule을 먼저 호출하세요.**
@@ -431,7 +460,8 @@ def _openf1(endpoint: str, params: dict = None) -> list:
         r.raise_for_status()
         d = r.json()
         return d if isinstance(d, list) else []
-    except Exception:
+    except Exception as e:
+        logger.debug("OpenF1 요청 실패 (%s): %s", endpoint, e)
         return []
 
 def _fetch_live_context() -> str | None:
@@ -505,10 +535,23 @@ def _fetch_live_context() -> str | None:
                     f"| {d['last_lap']} | {d['tyre_compound']} |"
                 )
 
+        # ── 팀 라디오 전사 (최근 10개) ─────────────────────────────────
+        radio_msgs = ls.build_team_radio(limit=10)
+        if radio_msgs:
+            lines.append("\n### 팀 라디오 전사 (최근 10개)")
+            lines.append("| 시각(UTC) | 드라이버# | 내용 |")
+            lines.append("|-----------|----------|------|")
+            for r in radio_msgs:
+                utc    = r.get("utc", "")[:19].replace("T", " ")
+                driver = r.get("driver", "-")
+                text   = r.get("text", "")
+                lines.append(f"| {utc} | #{driver} | {text} |")
+
         result = "\n".join(lines)
         return _cache(result)
 
-    except Exception:
+    except Exception as e:
+        logger.warning("live_context 빌드 실패: %s", e)
         return _cache(None)
 
 
@@ -605,8 +648,8 @@ def _try_direct_answer(message: str) -> str | None:
             raw = get_race_schedule.invoke({"season": CURRENT_SEASON})
             if _api_ok(raw):
                 api_data = raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("레이스 일정 조회 실패: %s", e)
 
     # ② 드라이버 챔피언십 순위
     elif any(k in msg for k in [
@@ -616,8 +659,8 @@ def _try_direct_answer(message: str) -> str | None:
             raw = get_driver_standings.invoke({"season": "current"})
             if _api_ok(raw):
                 api_data = raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("드라이버 스탠딩 조회 실패: %s", e)
 
     # ③ 컨스트럭터 / 팀 순위
     elif any(k in msg for k in [
@@ -627,8 +670,8 @@ def _try_direct_answer(message: str) -> str | None:
             raw = get_constructor_standings.invoke({"season": "current"})
             if _api_ok(raw):
                 api_data = raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("컨스트럭터 스탠딩 조회 실패: %s", e)
 
     # ④ 최근 레이스 결과
     elif any(k in msg for k in [
@@ -639,8 +682,8 @@ def _try_direct_answer(message: str) -> str | None:
             raw = get_race_results.invoke({"season": "current", "round_num": "last"})
             if _api_ok(raw):
                 api_data = raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("레이스 결과 조회 실패: %s", e)
 
     # ⑤ 예선 결과
     elif any(k in msg for k in [
@@ -650,8 +693,8 @@ def _try_direct_answer(message: str) -> str | None:
             raw = get_qualifying_results.invoke({"season": "current", "round_num": "last"})
             if _api_ok(raw):
                 api_data = raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("예선 결과 조회 실패: %s", e)
 
     # ⑥ 최신 뉴스 / 소식 / 이슈 (웹 검색 — F1 접두어 보장)
     elif any(k in msg for k in [
@@ -665,8 +708,8 @@ def _try_direct_answer(message: str) -> str | None:
             result = _run_search(query)
             if result and _is_f1_content(result):
                 news_data = result
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("뉴스 검색 실패: %s", e)
 
     # ⑦ 실시간 세션 질문 (사고·깃발·세이프티카·현재 상황 등)
     elif any(k in msg for k in [
@@ -701,8 +744,8 @@ def _try_direct_answer(message: str) -> str | None:
                 result = _run_search(query)
                 if result and _is_f1_content(result):
                     news_data = result
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("라이브 폴백 뉴스 검색 실패: %s", e)
 
     # ── 결과 반환 ──
     if api_data:
@@ -710,24 +753,24 @@ def _try_direct_answer(message: str) -> str | None:
             prompt = _DIRECT_PROMPT.format(data=api_data, question=message)
             response = llm.invoke(prompt)
             return response.content
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("LLM 직접 응답 실패 (api_data): %s", e)
 
     if news_data:
         try:
             prompt = _NEWS_PROMPT.format(data=news_data, question=message)
             response = llm.invoke(prompt)
             return _strip_japanese(response.content)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("LLM 직접 응답 실패 (news_data): %s", e)
 
     if live_data:
         try:
             prompt = _LIVE_PROMPT.format(data=live_data, question=message)
             response = llm.invoke(prompt)
             return response.content
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("LLM 직접 응답 실패 (live_data): %s", e)
 
     return None
 
