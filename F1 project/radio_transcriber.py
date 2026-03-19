@@ -45,7 +45,7 @@ _F1TV_IDEN_URL    = (
 )
 _F1TV_CONTENT_URL = "https://f1tv.formula1.com/2.0/R/ENG/BIG_SCREEN_HLS/ALL/CONTENT/PLAY"
 _F1TV_HEADERS     = {
-    "apikey": "fCUCjWrKPu9ylJwRAv8BpGLEgiAuThx7",
+    "apikey": os.getenv("F1TV_API_KEY", ""),
     "Content-Type": "application/json",
 }
 
