@@ -11,6 +11,7 @@ import asyncio
 from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+os.environ["DEMO_MODE"] = "true"  # 데모 엔드포인트 활성화
 
 import live_state as ls
 from telemetry import start_demo, stop_demo
