@@ -5,9 +5,10 @@ live_state.py 의 인메모리 상태를 읽어 프론트엔드에 반환.
 상태는 main.py 에서 기동하는 F1SignalRClient 백그라운드 태스크가 채운다.
 """
 
+import os
 from collections import deque
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import live_state as ls
 
 router = APIRouter(prefix="/api/live", tags=["telemetry"])
@@ -65,9 +66,15 @@ def get_car_data(driver_number: int):
 
 # ── 데모 모드 ────────────────────────────────────────────────────────────
 
+def _require_demo_mode():
+    if os.getenv("DEMO_MODE", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 @router.post("/demo")
 async def start_demo():
     """발표용 데모 데이터를 live_state에 주입합니다 (2026 바레인 GP, Lap 25/57)."""
+    _require_demo_mode()
     # 2026 그리드 (번호, 약어, 이름, 팀, 팀컬러)
     _DRIVERS = [
         ("4",  "NOR", "Lando Norris",     "McLaren",      "FF8000"),
@@ -181,6 +188,7 @@ async def start_demo():
 @router.post("/demo/stop")
 async def stop_demo():
     """데모 모드를 종료하고 live_state를 초기화합니다."""
+    _require_demo_mode()
     async with ls.live_lock:
         ls.live_state["active"]      = False
         ls.live_state["session"]     = None
@@ -189,6 +197,7 @@ async def stop_demo():
         ls.live_state["timing_app"]  = {}
         ls.live_state["car_data"]    = {}
         ls.live_state["race_control"]= deque(maxlen=50)
+        ls.live_state["team_radio"]  = deque(maxlen=50)
         ls.live_state["weather"]     = None
 
     return {"status": "ok", "message": "데모 종료"}
