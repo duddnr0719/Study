@@ -36,3 +36,7 @@ out/
 
 # Python 버전 관리 (pyenv 등)
 .python-version
+
+# Python 가상환경
+venv/
+.venv/

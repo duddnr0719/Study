@@ -1,0 +1,14 @@
+services:
+  file-gateway:
+    build: .
+    container_name: file-gateway
+    env_file:
+      - .env
+    volumes:
+      # 서버의 공유폴더를 컨테이너 내부에 마운트
+      # 테스트: 로컬 test_storage 폴더 사용
+      # 연구실: /home/lab/shared:/storage 로 변경
+      - ./test_storage:/storage
+    environment:
+      - BASE_STORAGE_PATH=/storage
+    restart: unless-stopped
