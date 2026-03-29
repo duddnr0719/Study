@@ -13,6 +13,7 @@ File Gateway - Slack ↔ 서버 공유폴더 파일 브릿지
 import os
 import re
 import io
+import time
 import uuid
 import zipfile
 import logging
@@ -46,6 +47,19 @@ channel_dirs: dict[str, str] = {}
 
 # 중복 파일 처리 대기 중인 작업 (pending_id → 작업 정보)
 pending_saves: dict[str, dict] = {}
+
+# pending_saves TTL (초)
+PENDING_SAVE_TTL = 600
+
+
+def cleanup_expired_pending():
+    """만료된 pending_saves 항목 제거 (TTL: 10분)"""
+    now = time.time()
+    expired = [k for k, v in list(pending_saves.items()) if now - v["created_at"] > PENDING_SAVE_TTL]
+    for k in expired:
+        pending_saves.pop(k, None)
+    if expired:
+        logger.info(f"만료된 pending_saves {len(expired)}건 정리")
 
 
 # ── 채널별 현재 디렉토리 관리 ──
@@ -163,6 +177,7 @@ def process_files_with_duplicate_check(files: list, dest_dir: Path, dest_path: s
 
         if save_path.exists():
             # 중복 → pending에 등록하고 버튼 전송
+            cleanup_expired_pending()
             pending_id = str(uuid.uuid4())
             pending_saves[pending_id] = {
                 "file_info": file_info,
@@ -170,6 +185,7 @@ def process_files_with_duplicate_check(files: list, dest_dir: Path, dest_path: s
                 "dest_path": dest_path,
                 "filename": filename,
                 "channel_id": channel_id,
+                "created_at": time.time(),
             }
             send_duplicate_prompt(channel_id, filename, dest_path, pending_id)
             results.append(f":hourglass_flowing_sand: `{filename}` — 중복 파일, 처리 방식을 선택해주세요.")
@@ -193,6 +209,7 @@ def process_files_with_duplicate_check(files: list, dest_dir: Path, dest_path: s
 @app.action("fg_overwrite")
 def action_overwrite(ack, body, client):
     ack()
+    cleanup_expired_pending()
     pending_id = body["actions"][0]["value"]
     pending = pending_saves.pop(pending_id, None)
     channel_id = body["channel"]["id"]
@@ -233,6 +250,7 @@ def action_overwrite(ack, body, client):
 @app.action("fg_rename")
 def action_rename(ack, body, client):
     ack()
+    cleanup_expired_pending()
     pending_id = body["actions"][0]["value"]
     pending = pending_saves.pop(pending_id, None)
     channel_id = body["channel"]["id"]
@@ -273,6 +291,7 @@ def action_rename(ack, body, client):
 @app.action("fg_cancel")
 def action_cancel(ack, body, client):
     ack()
+    cleanup_expired_pending()
     pending_id = body["actions"][0]["value"]
     pending_saves.pop(pending_id, None)
     channel_id = body["channel"]["id"]

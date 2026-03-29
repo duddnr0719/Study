@@ -40,3 +40,6 @@ out/
 # Python 가상환경
 venv/
 .venv/
+
+# 테스트 스토리지 (런타임 생성 파일)
+test_storage/
