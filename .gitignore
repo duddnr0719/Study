@@ -43,3 +43,7 @@ venv/
 
 # 테스트 스토리지 (런타임 생성 파일)
 test_storage/
+
+# 개인 문서
+*.docx
+*.pdf
