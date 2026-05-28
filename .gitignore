@@ -50,3 +50,10 @@ test_storage/
 
 # Claude Code 로컬 설정 (머신별 설정, 런타임 아티팩트)
 .claude/
+
+# .NET 빌드 아티팩트
+bin/
+obj/
+*.user
+*.suo
+.vs/
