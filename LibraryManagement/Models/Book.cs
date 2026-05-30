@@ -1,17 +1,20 @@
 namespace LibraryManagement.Models
 {
-    // book 테이블과 매핑되는 도서 모델
+    /// <summary>
+    /// 도서 모델 — 교재 13장 Book 클래스 필드 그대로 유지
+    /// book 테이블과 매핑
+    /// </summary>
     public class Book
     {
-        public int BookId { get; set; }
-        public string Title { get; set; } = string.Empty;
-        public string Author { get; set; } = string.Empty;
-        public string Publisher { get; set; } = string.Empty;
-        public string Isbn { get; set; } = string.Empty;
-        public bool IsAvailable { get; set; } = true;
+        public string   Isbn       { get; set; } = "";
+        public string   Name       { get; set; } = "";
+        public string   Publisher  { get; set; } = "";
+        public int      Page       { get; set; }
 
-        public string AvailableText => IsAvailable ? "대출가능" : "대출중";
-
-        public override string ToString() => Title;
+        // 대출 정보 (book 테이블 내 컬럼으로 저장)
+        public bool     isBorrowed { get; set; }
+        public DateTime BorrowedAt { get; set; }
+        public int      UserId     { get; set; }
+        public string   UserName   { get; set; } = "";
     }
 }

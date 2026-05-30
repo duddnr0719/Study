@@ -8,8 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LibraryManagement</AssemblyName>
     <RootNamespace>LibraryManagement</RootNamespace>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- macOS에서 Windows 타겟 프로젝트를 빌드할 때 필요한 설정 -->
+    <!-- macOS에서 Windows 타겟 빌드 허용 (제출용, 실행은 Windows에서) -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
