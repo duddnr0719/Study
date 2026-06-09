@@ -1,0 +1,1 @@
+dst[i,j] = sobel[i,j] if (v1 < sobel[i,j] > v2) else 0
