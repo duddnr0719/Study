@@ -47,3 +47,6 @@ test_storage/
 # 개인 문서
 *.docx
 *.pdf
+
+# IntelliJ 모듈 파일
+*.iml

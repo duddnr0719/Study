@@ -48,6 +48,5 @@ NVIDIA GPU가 탑재된 Kubernetes 클러스터에 **GPU 워크로드를 배포�
 ## 🗂️ 기타 프로젝트
 | 폴더 | 설명 |
 |------|------|
-| `opencode(1)` | arXiv 논문 크롤러 + Notion 자동 아카이빙 |
+| `smart-scholar-agent` | arXiv 논문 크롤러 + Notion 자동 아카이빙 |
 | `todo with claude` | FastAPI + Claude AI 기반 할일 관리 앱 |
-| `untitled` | Java 기초 실습 |
