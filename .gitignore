@@ -50,3 +50,7 @@ test_storage/
 
 # IntelliJ 모듈 파일
 *.iml
+
+# 로컬 DB (런타임 생성물)
+*.db
+*.sqlite3
