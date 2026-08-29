@@ -556,7 +556,7 @@ async function buildPptx() {
 
     const deploySteps = [
       { step: "1", label: "코드 수정 (로컬 맥북)", sub: "app.py, docker-compose.yml", color: C.blue },
-      { step: "2", label: "rsync 전송", sub: "yangzepa@100.127.64.21", color: C.teal },
+      { step: "2", label: "rsync 전송", sub: "deploy-user@gpu-server", color: C.teal },
       { step: "3", label: "docker compose up --build", sub: "서버에서 컨테이너 재빌드", color: "7B1FA2" },
       { step: "4", label: "Slack Socket Mode 연결", sub: "WebSocket 세션 수립 완료", color: C.green },
     ];

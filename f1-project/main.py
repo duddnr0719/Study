@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 # ── 설정 ──────────────────────────────────────────────────────────────
 LLM_MODEL        = os.getenv("OLLAMA_LLM_MODEL", "qwen3.5:122b")
-OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://100.66.16.106:11434")
+OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBEDDING_MODEL  = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 CHROMA_DIR       = os.getenv("CHROMA_DIR", "./chroma_db")
 OPENF1_BASE_URL  = os.getenv("OPENF1_BASE_URL", "https://api.openf1.org/v1")
