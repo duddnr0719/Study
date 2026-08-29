@@ -5,17 +5,11 @@
 
 ## 📁 프로젝트 목록
 
-### 🏎️ f1-project — F1 규정 & 데이터 전문 AI 챗봇
+### 🏎️ f1-project — F1 규정 & 데이터 전문 AI 챗봇 → 독립 레포로 이동
 > Python · FastAPI · LangGraph · ChromaDB · Groq LLM
 
-FIA 공식 규정 PDF(2024/2026)와 실시간 F1 레이스 데이터를 결합한 **RAG 기반 AI 어시스턴트**입니다.
-
-- FIA 규정집(PDF)을 벡터 DB에 임베딩해 조항 단위로 검색 (PDF는 저작권상 미포함 — 받는 법은 [`f1-project/data/README.md`](./f1-project/data/README.md))
-- Jolpica(Ergast 호환) API로 드라이버/컨스트럭터 스탠딩, 레이스 결과, 예선, 피트스톱, 시즌 일정 조회
-- OpenF1 API로 실시간 세션 텔레메트리 조회
-- LangGraph ReAct 에이전트 + MemorySaver로 멀티턴 대화 유지
-- SSE(Server-Sent Events) 스트리밍 응답 지원
-- `"2026년 안전차 규정에서 오버테이킹은 허용되나요?"` 같은 자연어 질문에 조항 번호와 함께 답변
+**[duddnr0719/f1-project](https://github.com/duddnr0719/f1-project)로 분리했습니다** (2026-08-30, 이력 보존).
+FIA 공식 규정 PDF(2024/2026)와 실시간 F1 레이스 데이터를 결합한 RAG 기반 AI 어시스턴트 — 상세는 새 레포 README 참고.
 
 ---
 
