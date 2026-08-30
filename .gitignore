@@ -64,3 +64,5 @@ obj/
 # 로컬 DB (런타임 생성물)
 *.db
 *.sqlite3
+untitled/
+TrackLook/
